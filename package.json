@@ -3,7 +3,7 @@
     "scripts": {
         "build": "yarn tsc --build",
         "start": "node ./lib/src/index.js",
-        "start:dev": "nodemon --exec node --inspect=0.0.0.0:9240 --signal SIGINT -r ts-node/register ./src/index.ts",
+        "start:dev": "ts-node-dev --inspect=0.0.0.0:9240 --respawn --transpile-only ./src/index.ts",
         "docker:build": "docker-compose -f docker-compose.yml up --build",
         "docker:start": "yarn docker:down && yarn docker:up",
         "docker:up": "docker-compose -f docker-compose.yml up",
@@ -34,7 +34,8 @@
         "nodemon": "^3.1.7",
         "prettier": "^3.3.3",
         "shx": "^0.3.4",
-        "ts-node": "^10.9.2"
+        "ts-node": "^10.9.2",
+        "ts-node-dev": "^2.0.0"
     },
     "name": "kodus-service-billing",
     "version": "1.0.0",

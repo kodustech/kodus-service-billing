@@ -12,13 +12,10 @@ router.post("/create-checkout-session", async (req, res) => {
   await SubscriptionController.createCheckoutSession(req, res);
 });
 
-router.post(
-  "/webhook",
-  express.raw({ type: "application/json" }),
-  async (req, res) => {
-    await SubscriptionController.handleWebhook(req, res);
-  }
-);
+// Rota de webhook do Stripe
+router.post("/webhook", async (req, res) => {
+  await SubscriptionController.handleWebhook(req, res);
+});
 
 router.post("/validate-token", async (req, res) => {
   await SubscriptionController.validateCloudToken(req, res);

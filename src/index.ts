@@ -16,7 +16,7 @@ const port = process.env.API_PORT || 3992;
 initializeDatabase()
   .then(() => {
     console.log("Database initialized successfully!");
-    
+
     // Iniciar cron jobs após conexão com o banco
     cron;
   })
@@ -27,13 +27,21 @@ initializeDatabase()
 app.use(helmet());
 app.use(cors(corsOptions));
 
-app.post("/webhook", express.raw({ type: "application/json" }));
+// Configuração para processar o corpo bruto das requisições para webhooks
+// Isso deve vir ANTES dos parsers de JSON
+app.use((req, res, next) => {
+  if (req.originalUrl === "/api/billing/webhook") {
+    express.raw({ type: "application/json" })(req, res, next);
+  } else {
+    next();
+  }
+});
 
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json({ limit: "10mb" }));
 
-app.use("/api/subscription", subscriptionRoutes);
+app.use("/api/billing", subscriptionRoutes);
 
 app.listen(port, () => {
-  console.log(`Subscription service listening to port ${port}`);
+  console.log(`billing service listening to port ${port}`);
 });
