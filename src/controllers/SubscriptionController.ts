@@ -102,4 +102,46 @@ export class SubscriptionController {
       return res.status(500).json({ error: "Erro ao validar token" });
     }
   }
+
+  static async assignLicense(req: Request, res: Response): Promise<Response> {
+    try {
+      const { organizationId, users } = req.body;
+
+      if (!organizationId) {
+        return res.status(400).json({ 
+          error: "ID da organização é obrigatório" 
+        });
+      }
+
+      // Normaliza o input para sempre ser um array
+      const usersArray = Array.isArray(users) ? users : [users];
+
+      if (!usersArray.length) {
+        return res.status(400).json({ 
+          error: "É necessário fornecer pelo menos um usuário" 
+        });
+      }
+
+      // Validar estrutura de cada usuário
+      for (const user of usersArray) {
+        if (!user.gitId || !user.gitTool || user.licenseStatus === undefined) {
+          return res.status(400).json({ 
+            error: "Cada usuário deve ter gitId, gitTool e licenseStatus" 
+          });
+        }
+      }
+
+      const results = await OrganizationLicenseService.assignLicensesToUsers(
+        organizationId,
+        usersArray
+      );
+
+      return res.status(201).json(results);
+    } catch (error) {
+      console.error("Erro ao atribuir licença(s):", error);
+      return res.status(500).json({ 
+        error: error instanceof Error ? error.message : "Erro ao atribuir licença(s) ao(s) usuário(s)" 
+      });
+    }
+  }
 }

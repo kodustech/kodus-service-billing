@@ -25,9 +25,6 @@ export class UserLicense {
   id: string;
 
   @Column()
-  userId: string;
-
-  @Column()
   git_id: string;
 
   @Column({

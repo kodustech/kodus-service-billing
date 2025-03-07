@@ -21,4 +21,9 @@ router.post("/validate-token", async (req, res) => {
   await SubscriptionController.validateCloudToken(req, res);
 });
 
+// Rota para atribuir licença a um usuário
+router.post("/assign-license", async (req, res) => {
+  await SubscriptionController.assignLicense(req, res);
+});
+
 export default router;
