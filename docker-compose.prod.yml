@@ -1,0 +1,20 @@
+services:
+  kodus-service-billing:
+    image: ${IMAGE_NAME_PROD}
+    container_name: ${CONTAINER_NAME}
+    volumes:
+      - log_volume:/app/logs
+    logging:
+      options:
+        max-size: "200m"
+        max-file: "10"
+    ports:
+      - "3992:3992"
+    environment:
+      - ENV=production
+    env_file:
+      - .env.prod
+    restart: unless-stopped
+
+volumes:
+  log_volume:
