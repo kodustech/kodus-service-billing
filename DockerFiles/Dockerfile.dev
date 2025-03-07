@@ -1,0 +1,20 @@
+FROM node:lts-alpine3.18 AS development
+
+WORKDIR /usr/src/app
+
+EXPOSE ${PORT}
+
+# Defina a variável de ambiente NODE_ENV para "development"
+ENV NODE_ENV=development
+
+# Copie os arquivos do projeto
+COPY package.json yarn.lock ./
+
+# Instale todas as dependências
+RUN yarn install
+
+# Copie o resto dos arquivos
+COPY . .
+
+# Comando de inicialização para desenvolvimento
+CMD ["yarn", "start:dev"] 

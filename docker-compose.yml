@@ -1,0 +1,25 @@
+services:
+    kodus-subscription-service:
+        container_name: kodus-service-subscription
+        build:
+            context: .
+            dockerfile: DockerFiles/Dockerfile.dev
+        ports:
+            - '3992:3992'
+            - '9240:9240'
+        restart: unless-stopped
+        volumes:
+            - .:/app
+        environment:
+            - NODE_ENV=development
+        env_file:
+            - .env
+        networks:
+            - kodus-backend-services
+            - shared-network
+
+networks:
+    kodus-backend-services:
+        external: true
+    shared-network:
+        external: true

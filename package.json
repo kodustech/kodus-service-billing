@@ -1,0 +1,43 @@
+{
+    "main": "./lib/src/index.js",
+    "scripts": {
+        "build": "yarn tsc --build",
+        "start": "node ./lib/src/index.js",
+        "start:dev": "nodemon --exec node --inspect=0.0.0.0:9240 --signal SIGINT -r ts-node/register ./src/index.ts",
+        "docker:build": "docker-compose -f docker-compose.yml up --build",
+        "docker:start": "yarn docker:down && yarn docker:up",
+        "docker:up": "docker-compose -f docker-compose.yml up",
+        "docker:down": "docker-compose -f docker-compose.yml down"
+    },
+    "dependencies": {
+        "axios": "^1.7.7",
+        "cors": "^2.8.5",
+        "dotenv": "^16.4.5",
+        "express": "^4.21.0",
+        "helmet": "^8.0.0",
+        "node-cron": "^3.0.3",
+        "pg": "^8.13.3",
+        "reflect-metadata": "^0.2.2",
+        "stripe": "^17.7.0",
+        "typeorm": "^0.3.21",
+        "typescript": "^5.6.2",
+        "uuid": "^10.0.0"
+    },
+    "devDependencies": {
+        "@types/express": "^5.0.0",
+        "@types/node": "^22.7.4",
+        "@typescript-eslint/eslint-plugin": "^8.8.0",
+        "@typescript-eslint/parser": "^8.8.0",
+        "eslint": "^9.11.1",
+        "eslint-config-prettier": "^9.1.0",
+        "eslint-plugin-prettier": "^5.2.1",
+        "nodemon": "^3.1.7",
+        "prettier": "^3.3.3",
+        "shx": "^0.3.4",
+        "ts-node": "^10.9.2"
+    },
+    "name": "kodus-service-subscription",
+    "version": "1.0.0",
+    "author": "malinosqui <gabrielmalinosqui@gmail.com>",
+    "license": "MIT"
+}

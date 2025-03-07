@@ -1,0 +1,28 @@
+FROM node:lts-alpine3.18 AS production
+
+WORKDIR /app
+
+# Instalação de Dependências
+COPY package.json yarn.lock ./
+
+# Copiando a aplicação
+COPY . .
+
+# Instale apenas as dependências de produção
+RUN yarn install && yarn build
+
+# Instalação do PM2
+RUN yarn global add pm2
+
+# Instalação do pm2-logrotate
+RUN pm2 install pm2-logrotate
+
+# Define configurações do pm2-logrotate
+RUN pm2 set pm2-logrotate:max_size 30M
+RUN pm2 set pm2-logrotate:retain 10
+
+# Expondo a porta
+EXPOSE ${PORT}
+
+# Comando de inicialização usando PM2
+CMD ["pm2-runtime", "start", "ecosystem.config.js", "--env", "production"] 
