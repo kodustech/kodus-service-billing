@@ -1,6 +1,6 @@
 services:
-    kodus-subscription-service:
-        container_name: kodus-service-subscription
+    kodus-billing-service:
+        container_name: kodus-service-billing
         build:
             context: .
             dockerfile: DockerFiles/Dockerfile.dev
