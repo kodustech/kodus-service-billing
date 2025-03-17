@@ -2,7 +2,7 @@ module.exports = {
     apps: [
       {
         name: 'kodus-service-analytics',
-        script: 'lib/index.js',
+        script: 'lib/src/index.js',
         instances: 1,
         autorestart: true,
         watch: false,

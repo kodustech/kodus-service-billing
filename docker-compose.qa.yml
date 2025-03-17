@@ -1,7 +1,7 @@
 services:
   kodus-service-billing:
-    image: ${IMAGE_NAME}
-    container_name: ${CONTAINER_NAME}
+    image: kodus-service-billing:latest
+    container_name: kodus-service-billing
     volumes:
       - log_volume:/app/logs
     logging:
