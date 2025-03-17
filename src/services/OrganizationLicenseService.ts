@@ -10,16 +10,18 @@ import crypto from "crypto";
 
 export class OrganizationLicenseService {
   static async createTrialLicense(
-    organizationId: string
+    organizationId: string,
+    teamId: string
   ): Promise<OrganizationLicense> {
     const trialDays = parseInt(process.env.TRIAL_DAYS || "14");
     const trialEnd = new Date();
     trialEnd.setDate(trialEnd.getDate() + trialDays);
 
-    const cloudToken = this.generateCloudToken(organizationId);
+    const cloudToken = this.generateCloudToken(organizationId, teamId);
 
     const license = OrganizationLicenseRepository.create({
       organizationId,
+      teamId,
       subscriptionStatus: SubscriptionStatus.TRIAL,
       cloudToken,
       trialEnd,
@@ -31,21 +33,25 @@ export class OrganizationLicenseService {
   }
 
   // Gerar um token seguro para a organização
-  private static generateCloudToken(organizationId: string): string {
+  private static generateCloudToken(
+    organizationId: string,
+    teamId: string
+  ): string {
     const secret = process.env.CLOUD_TOKEN_SECRET;
 
     return crypto
       .createHmac("sha256", secret)
-      .update(`${organizationId}-${Date.now()}`)
+      .update(`${organizationId}-${teamId}-${Date.now()}`)
       .digest("hex");
   }
 
   static async validateCloudToken(
     organizationId: string,
-    cloudToken: string
+    cloudToken: string,
+    teamId: string
   ): Promise<boolean> {
     const license = await OrganizationLicenseRepository.findOne({
-      where: { organizationId, cloudToken },
+      where: { organizationId, cloudToken, teamId },
     });
 
     if (!license) return false;
@@ -83,7 +89,12 @@ export class OrganizationLicenseService {
 
   static async assignLicensesToUsers(
     organizationId: string,
-    users: Array<{ gitId: string; gitTool: GitTool; licenseStatus: LicenseStatus }>
+    teamId: string,
+    users: Array<{
+      gitId: string;
+      gitTool: GitTool;
+      licenseStatus: LicenseStatus;
+    }>
   ): Promise<{
     successful: UserLicense[];
     failed: Array<{
@@ -95,7 +106,11 @@ export class OrganizationLicenseService {
     const orgLicense = await OrganizationLicenseRepository.findOne({
       where: {
         organizationId,
-        subscriptionStatus: In([SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL]),
+        teamId,
+        subscriptionStatus: In([
+          SubscriptionStatus.ACTIVE,
+          SubscriptionStatus.TRIAL,
+        ]),
       },
     });
 
@@ -116,19 +131,21 @@ export class OrganizationLicenseService {
     // Verificar licenças existentes para os usuários
     const existingLicenses = await UserLicenseRepository.find({
       where: {
-        git_id: In(users.map(u => u.gitId)),
+        git_id: In(users.map((u) => u.gitId)),
         organizationLicenseId: orgLicense.id,
       },
     });
 
     // Mapear usuários que já têm licença
     const existingLicenseMap = new Map(
-      existingLicenses.map(license => [license.git_id, license])
+      existingLicenses.map((license) => [license.git_id, license])
     );
 
     // Contar quantas novas licenças precisaremos (apenas para ativações)
     const novosUsuarios = users.filter(
-      user => !existingLicenseMap.has(user.gitId) && user.licenseStatus === LicenseStatus.ACTIVE
+      (user) =>
+        !existingLicenseMap.has(user.gitId) &&
+        user.licenseStatus === LicenseStatus.ACTIVE
     );
 
     // Verificar licenças disponíveis
@@ -157,16 +174,20 @@ export class OrganizationLicenseService {
           // Atualizar a licença existente com os novos dados
           existingLicense.git_tool = user.gitTool;
           existingLicense.licenseStatus = user.licenseStatus;
-          
+
           // Se estamos desativando uma licença, liberar uma vaga
-          if (existingLicense.licenseStatus === LicenseStatus.ACTIVE && 
-              user.licenseStatus === LicenseStatus.INACTIVE) {
+          if (
+            existingLicense.licenseStatus === LicenseStatus.ACTIVE &&
+            user.licenseStatus === LicenseStatus.INACTIVE
+          ) {
             orgLicense.assignedLicenses--;
             licencasDisponiveis++;
           }
           // Se estamos reativando uma licença, verificar disponibilidade
-          else if (existingLicense.licenseStatus === LicenseStatus.INACTIVE && 
-                   user.licenseStatus === LicenseStatus.ACTIVE) {
+          else if (
+            existingLicense.licenseStatus === LicenseStatus.INACTIVE &&
+            user.licenseStatus === LicenseStatus.ACTIVE
+          ) {
             if (licencasDisponiveis <= 0) {
               results.failed.push({
                 user,
@@ -178,12 +199,16 @@ export class OrganizationLicenseService {
             licencasDisponiveis--;
           }
 
-          const updatedLicense = await UserLicenseRepository.save(existingLicense);
+          const updatedLicense =
+            await UserLicenseRepository.save(existingLicense);
           results.successful.push(updatedLicense);
         } catch (error) {
           results.failed.push({
             user,
-            error: error instanceof Error ? error.message : "Erro ao atualizar licença existente",
+            error:
+              error instanceof Error
+                ? error.message
+                : "Erro ao atualizar licença existente",
           });
         }
       } else if (user.licenseStatus === LicenseStatus.ACTIVE) {
@@ -215,7 +240,10 @@ export class OrganizationLicenseService {
         } catch (error) {
           results.failed.push({
             user,
-            error: error instanceof Error ? error.message : "Erro ao criar nova licença",
+            error:
+              error instanceof Error
+                ? error.message
+                : "Erro ao criar nova licença",
           });
         }
       }
@@ -230,11 +258,12 @@ export class OrganizationLicenseService {
   // Mantemos o método original para compatibilidade e uso interno
   static async assignLicenseToUser(
     organizationId: string,
+    teamId: string,
     userId: string,
     gitId: string,
     gitTool: GitTool
   ): Promise<UserLicense> {
-    const result = await this.assignLicensesToUsers(organizationId, [
+    const result = await this.assignLicensesToUsers(organizationId, teamId, [
       {
         gitId,
         gitTool,
@@ -247,5 +276,20 @@ export class OrganizationLicenseService {
     }
 
     return result.successful[0];
+  }
+
+  static async checkUserLicense(
+    organizationId: string,
+    userId: string,
+    teamId: string
+  ): Promise<UserLicense> {
+    const license = await UserLicenseRepository.findOne({
+      where: {
+        git_id: userId,
+        organizationLicense: { organizationId, teamId },
+      },
+    });
+
+    return license;
   }
 }

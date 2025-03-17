@@ -22,6 +22,9 @@ export class OrganizationLicense {
   @Column()
   organizationId: string;
 
+  @Column()
+  teamId: string;
+
   @Column({
     type: "enum",
     enum: SubscriptionStatus,

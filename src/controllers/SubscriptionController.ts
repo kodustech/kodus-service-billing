@@ -6,16 +6,18 @@ import Stripe from "stripe";
 export class SubscriptionController {
   static async createTrial(req: Request, res: Response): Promise<Response> {
     try {
-      const { organizationId } = req.body;
+      const { organizationId, teamId } = req.body;
 
-      if (!organizationId) {
+      if (!organizationId || !teamId) {
         return res
           .status(400)
-          .json({ error: "ID da organização é obrigatório" });
+          .json({ error: "ID da organização e teamId são obrigatórios" });
       }
 
-      const license =
-        await OrganizationLicenseService.createTrialLicense(organizationId);
+      const license = await OrganizationLicenseService.createTrialLicense(
+        organizationId,
+        teamId
+      );
 
       return res.status(201).json(license);
     } catch (error) {
@@ -29,17 +31,18 @@ export class SubscriptionController {
     res: Response
   ): Promise<Response> {
     try {
-      const { organizationId, quantity } = req.body;
+      const { organizationId, quantity, teamId } = req.body;
 
-      if (!organizationId || !quantity) {
-        return res
-          .status(400)
-          .json({ error: "ID da organização e quantidade são obrigatórios" });
+      if (!organizationId || !quantity || !teamId) {
+        return res.status(400).json({
+          error: "ID da organização, quantidade e teamId são obrigatórios",
+        });
       }
 
       const checkoutUrl = await StripeService.createCheckoutSession(
         organizationId,
-        quantity
+        quantity,
+        teamId
       );
 
       return res.json({ url: checkoutUrl });
@@ -60,7 +63,7 @@ export class SubscriptionController {
 
     try {
       const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "");
-      
+
       const event = stripe.webhooks.constructEvent(
         req.body,
         sig,
@@ -83,7 +86,7 @@ export class SubscriptionController {
     res: Response
   ): Promise<Response> {
     try {
-      const { organizationId, cloudToken } = req.body;
+      const { organizationId, cloudToken, teamId } = req.query;
 
       if (!organizationId || !cloudToken) {
         return res
@@ -92,8 +95,9 @@ export class SubscriptionController {
       }
 
       const isValid = await OrganizationLicenseService.validateCloudToken(
-        organizationId,
-        cloudToken
+        organizationId as string,
+        cloudToken as string,
+        teamId as string
       );
 
       return res.json({ valid: isValid });
@@ -105,11 +109,11 @@ export class SubscriptionController {
 
   static async assignLicense(req: Request, res: Response): Promise<Response> {
     try {
-      const { organizationId, users } = req.body;
+      const { organizationId, users, teamId } = req.body;
 
-      if (!organizationId) {
-        return res.status(400).json({ 
-          error: "ID da organização é obrigatório" 
+      if (!organizationId || !teamId) {
+        return res.status(400).json({
+          error: "ID da organização e teamId são obrigatórios",
         });
       }
 
@@ -117,31 +121,63 @@ export class SubscriptionController {
       const usersArray = Array.isArray(users) ? users : [users];
 
       if (!usersArray.length) {
-        return res.status(400).json({ 
-          error: "É necessário fornecer pelo menos um usuário" 
+        return res.status(400).json({
+          error: "É necessário fornecer pelo menos um usuário",
         });
       }
 
       // Validar estrutura de cada usuário
       for (const user of usersArray) {
         if (!user.gitId || !user.gitTool || user.licenseStatus === undefined) {
-          return res.status(400).json({ 
-            error: "Cada usuário deve ter gitId, gitTool e licenseStatus" 
+          return res.status(400).json({
+            error: "Cada usuário deve ter gitId, gitTool e licenseStatus",
           });
         }
       }
 
       const results = await OrganizationLicenseService.assignLicensesToUsers(
         organizationId,
+        teamId,
         usersArray
       );
 
       return res.status(201).json(results);
     } catch (error) {
       console.error("Erro ao atribuir licença(s):", error);
-      return res.status(500).json({ 
-        error: error instanceof Error ? error.message : "Erro ao atribuir licença(s) ao(s) usuário(s)" 
+      return res.status(500).json({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Erro ao atribuir licença(s) ao(s) usuário(s)",
       });
+    }
+  }
+
+  static async checkUserLicense(
+    req: Request,
+    res: Response
+  ): Promise<Response> {
+    try {
+      const { organizationId, gitId, teamId } = req.query;
+
+      if (!organizationId || !gitId || !teamId) {
+        return res.status(400).json({
+          error: "ID da organização, userId e teamId são obrigatórios",
+        });
+      }
+
+      const license = await OrganizationLicenseService.checkUserLicense(
+        organizationId as string,
+        gitId as string,
+        teamId as string
+      );
+
+      return res.status(200).json(license);
+    } catch (error) {
+      console.error("Erro ao verificar licença do usuário:", error);
+      return res
+        .status(500)
+        .json({ error: "Erro ao verificar licença do usuário" });
     }
   }
 }

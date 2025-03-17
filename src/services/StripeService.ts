@@ -9,7 +9,8 @@ export class StripeService {
   // Criar sessão de checkout para assinatura
   static async createCheckoutSession(
     organizationId: string,
-    quantity: number
+    quantity: number,
+    teamId: string  
   ): Promise<string> {
     // Buscar a licença da organização
     const license = await OrganizationLicenseRepository.findOne({
@@ -34,6 +35,7 @@ export class StripeService {
       client_reference_id: organizationId,
       metadata: {
         organizationId: organizationId,
+        teamId: teamId,
         licenseId: license.id,
       },
     });
