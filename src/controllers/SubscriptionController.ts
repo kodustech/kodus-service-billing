@@ -190,4 +190,31 @@ export class SubscriptionController {
         .json({ error: "Erro ao verificar licença do usuário" });
     }
   }
+
+  static async getAllUsersWithLicense(
+    req: Request,
+    res: Response
+  ): Promise<Response> {
+    try {
+      const { organizationId, teamId } = req.query;
+
+      if (!organizationId || !teamId) {
+        return res.status(400).json({
+          error: "ID da organização e teamId são obrigatórios",
+        });
+      }
+
+      const licenses = await OrganizationLicenseService.getAllUsersWithLicense(
+        organizationId as string,
+        teamId as string
+      );
+
+      return res.status(200).json(licenses);
+    } catch (error) {
+      console.error("Erro ao buscar usuários com licença:", error);
+      return res.status(500).json({
+        error: "Erro ao buscar usuários com licença",
+      });
+    }
+  }
 }

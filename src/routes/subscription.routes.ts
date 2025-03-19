@@ -37,4 +37,12 @@ router.get(
   }
 );
 
+router.get(
+  "/users-with-license",
+  cacheMiddleware({ ttl: 15 * 60, keyPrefix: "users-license" }),
+  async (req, res) => {
+    await SubscriptionController.getAllUsersWithLicense(req, res);
+  }
+);
+
 export default router;

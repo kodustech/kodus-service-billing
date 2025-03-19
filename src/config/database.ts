@@ -1,9 +1,11 @@
 import { DataSource } from "typeorm";
 import "dotenv/config";
+import { UserLicense } from "../entities/UserLicense";
+import { OrganizationLicense } from "../entities/OrganizationLicense";
 
 export const AppDataSource = new DataSource({
   type: "postgres",
-  host: process.env.NODE_ENV === "development" 
+  host: process.env.API_DATABASE_ENV === "development" 
     ? "localhost" 
     : process.env.PG_DB_HOST,
   port: parseInt(process.env.PG_DB_PORT || "5432"),
@@ -11,9 +13,9 @@ export const AppDataSource = new DataSource({
   password: process.env.PG_DB_PASSWORD,
   database: process.env.PG_DB_DATABASE,
   schema: process.env.PG_DB_SCHEMA || "subscription",
-  synchronize: process.env.NODE_ENV === "development",
-  logging: process.env.NODE_ENV === "development",
-  entities: ["src/entities/**/*.ts"],
+  synchronize: process.env.API_BILLING_NODE_ENV === "development",
+  logging: process.env.API_BILLING_NODE_ENV === "development",
+  entities: [UserLicense, OrganizationLicense],
   migrations: ["src/migrations/**/*.ts"],
   subscribers: ["src/subscribers/**/*.ts"],
 });

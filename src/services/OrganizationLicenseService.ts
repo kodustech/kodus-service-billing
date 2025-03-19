@@ -286,4 +286,29 @@ export class OrganizationLicenseService {
       subscriptionStatus: license.subscriptionStatus,
     };
   }
+
+  static async getAllUsersWithLicense(
+    organizationId: string,
+    teamId: string
+  ): Promise<{ git_id: string; git_tool: GitTool; licenseStatus: LicenseStatus }[]> {
+    const licenses = await UserLicenseRepository.find({
+      where: {
+        organizationLicense: { 
+          organizationId,
+          teamId,
+          subscriptionStatus: In([SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL])
+        },
+      },
+      relations: ["organizationLicense"],
+      order: {
+        createdAt: "DESC"
+      }
+    });
+
+    return licenses.map((license) => ({
+      git_id: license.git_id,
+      git_tool: license.git_tool,
+      licenseStatus: license.licenseStatus,
+    }));
+  }
 }

@@ -1,8 +1,8 @@
+import "reflect-metadata"; // Importante para TypeORM
 import express, { Express } from "express";
 import bodyParser from "body-parser";
 import helmet from "helmet";
 import cors from "cors";
-import "reflect-metadata"; // Importante para TypeORM
 import { initializeDatabase } from "./config/database";
 import subscriptionRoutes from "./routes/subscription.routes";
 import corsOptions from "./config/utils/cors";
