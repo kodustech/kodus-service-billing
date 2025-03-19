@@ -251,6 +251,7 @@ export class OrganizationLicenseService {
     valid: boolean;
     subscriptionStatus?: SubscriptionStatus;
     trialEnd?: Date;
+    numberOfLicenses?: number;
   }> {
     const license = await OrganizationLicenseRepository.findOne({
       where: { organizationId, teamId },
@@ -284,6 +285,7 @@ export class OrganizationLicenseService {
         license.subscriptionStatus
       ),
       subscriptionStatus: license.subscriptionStatus,
+      numberOfLicenses: license.totalLicenses,
     };
   }
 

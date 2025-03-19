@@ -124,4 +124,22 @@ export class StripeService {
 
     // TODO: Expirar licenças de usuários
   }
+
+  static async createCustomerPortalSession(organizationId: string, teamId: string): Promise<string> {
+    // Buscar a licença da organização
+    const license = await OrganizationLicenseRepository.findOne({
+      where: { organizationId, teamId },
+    });
+
+    if (!license || !license.stripeCustomerId) {
+      throw new Error("Organização não encontrada ou sem assinatura ativa");
+    }
+
+    const session = await stripe.billingPortal.sessions.create({
+      customer: license.stripeCustomerId,
+      return_url: `${process.env.FRONTEND_URL}/subscription`,
+    });
+
+    return session.url;
+  }
 }

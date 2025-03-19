@@ -45,4 +45,11 @@ router.get(
   }
 );
 
+router.get(
+  "/portal/:organizationId/:teamId",
+  async (req, res) => {
+    await SubscriptionController.getCustomerPortalUrl(req, res);
+  }
+);
+
 export default router;

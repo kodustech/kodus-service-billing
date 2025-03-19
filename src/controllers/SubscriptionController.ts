@@ -217,4 +217,19 @@ export class SubscriptionController {
       });
     }
   }
+
+  static async getCustomerPortalUrl(req: Request, res: Response) {
+    try {
+      const organizationId = req.params.organizationId; 
+      const teamId = req.params.teamId;
+      
+      const url = await StripeService.createCustomerPortalSession(organizationId, teamId);
+      
+      return res.json({ url });
+    } catch (error) {
+      return res.status(400).json({ 
+        error: error instanceof Error ? error.message : 'Erro ao gerar URL do portal' 
+      });
+    }
+  }
 }
