@@ -7,7 +7,11 @@
         "docker:build": "docker-compose -f docker-compose.yml up --build",
         "docker:start": "yarn docker:down && yarn docker:up",
         "docker:up": "docker-compose -f docker-compose.yml up",
-        "docker:down": "docker-compose -f docker-compose.yml down"
+        "docker:down": "docker-compose -f docker-compose.yml down",
+        "typeorm": "typeorm-ts-node-commonjs",
+        "migration:generate": "f() { npx typeorm-ts-node-commonjs migration:generate -p -d src/config/database.ts src/migrations/$@; }; f",
+        "migration:run": "npx typeorm-ts-node-commonjs migration:run -d src/config/database.ts",
+        "migration:revert": "npx typeorm-ts-node-commonjs migration:revert -d src/config/database.ts"
     },
     "dependencies": {
         "axios": "^1.7.7",

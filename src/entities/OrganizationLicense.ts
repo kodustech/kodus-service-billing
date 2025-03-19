@@ -32,9 +32,6 @@ export class OrganizationLicense {
   })
   subscriptionStatus: SubscriptionStatus;
 
-  @Column()
-  cloudToken: string;
-
   @Column({ type: "timestamp" })
   trialEnd: Date;
 

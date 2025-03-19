@@ -15,7 +15,7 @@ export class OrganizationLicenseService {
   ): Promise<OrganizationLicense> {
     // Verifica se já existe uma licença para essa organização e time
     const existingLicense = await OrganizationLicenseRepository.findOne({
-      where: { organizationId, teamId }
+      where: { organizationId, teamId },
     });
 
     if (existingLicense) {
@@ -26,13 +26,10 @@ export class OrganizationLicenseService {
     const trialEnd = new Date();
     trialEnd.setDate(trialEnd.getDate() + trialDays);
 
-    const cloudToken = this.generateCloudToken(organizationId, teamId);
-
     const license = OrganizationLicenseRepository.create({
       organizationId,
       teamId,
       subscriptionStatus: SubscriptionStatus.TRIAL,
-      cloudToken,
       trialEnd,
       totalLicenses: 0,
       assignedLicenses: 0,
@@ -40,20 +37,6 @@ export class OrganizationLicenseService {
 
     return await OrganizationLicenseRepository.save(license);
   }
-
-  // Gerar um token seguro para a organização
-  private static generateCloudToken(
-    organizationId: string,
-    teamId: string
-  ): string {
-    const secret = process.env.CLOUD_TOKEN_SECRET;
-
-    return crypto
-      .createHmac("sha256", secret)
-      .update(`${organizationId}-${teamId}-${Date.now()}`)
-      .digest("hex");
-  }
-
 
   static async assignLicensesToUsers(
     organizationId: string,
@@ -261,9 +244,8 @@ export class OrganizationLicenseService {
     return { git_id: userId, isValid: !!license };
   }
 
-  static async validateCloudToken(
+  static async validateLicense(
     organizationId: string,
-    cloudToken: string,
     teamId: string
   ): Promise<{
     valid: boolean;
@@ -271,7 +253,7 @@ export class OrganizationLicenseService {
     trialEnd?: Date;
   }> {
     const license = await OrganizationLicenseRepository.findOne({
-      where: { organizationId, cloudToken, teamId },
+      where: { organizationId, teamId },
     });
 
     if (!license) return { valid: false };
@@ -282,9 +264,9 @@ export class OrganizationLicenseService {
       if (now > license.trialEnd) {
         license.subscriptionStatus = SubscriptionStatus.EXPIRED;
         await OrganizationLicenseRepository.save(license);
-        return { 
+        return {
           valid: false,
-          subscriptionStatus: SubscriptionStatus.EXPIRED
+          subscriptionStatus: SubscriptionStatus.EXPIRED,
         };
       }
 
@@ -292,7 +274,7 @@ export class OrganizationLicenseService {
       return {
         valid: true,
         subscriptionStatus: SubscriptionStatus.TRIAL,
-        trialEnd: license.trialEnd
+        trialEnd: license.trialEnd,
       };
     }
 
@@ -301,7 +283,7 @@ export class OrganizationLicenseService {
       valid: [SubscriptionStatus.TRIAL, SubscriptionStatus.ACTIVE].includes(
         license.subscriptionStatus
       ),
-      subscriptionStatus: license.subscriptionStatus
+      subscriptionStatus: license.subscriptionStatus,
     };
   }
 }

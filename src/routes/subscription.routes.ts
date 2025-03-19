@@ -21,7 +21,7 @@ router.get(
   "/validate-org-license",
   cacheMiddleware({ ttl: 15 * 60, keyPrefix: "org-license" }),
   async (req, res) => {
-    await SubscriptionController.validateCloudToken(req, res);
+    await SubscriptionController.validateLicense(req, res);
   }
 );
 

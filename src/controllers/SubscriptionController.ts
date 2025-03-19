@@ -22,12 +22,14 @@ export class SubscriptionController {
       return res.status(201).json(license);
     } catch (error) {
       console.error("Erro ao criar trial:", error);
-      
+
       // Se for erro de licença duplicada, retorna 409 Conflict
-      if (error instanceof Error && 
-          error.message === "Já existe uma licença para esta organização e time") {
-        return res.status(409).json({ 
-          error: error.message 
+      if (
+        error instanceof Error &&
+        error.message === "Já existe uma licença para esta organização e time"
+      ) {
+        return res.status(409).json({
+          error: error.message,
         });
       }
 
@@ -90,22 +92,21 @@ export class SubscriptionController {
     }
   }
 
-  static async validateCloudToken(
+  static async validateLicense(
     req: Request,
     res: Response
   ): Promise<Response> {
     try {
-      const { organizationId, cloudToken, teamId } = req.query;
+      const { organizationId, teamId } = req.query;
 
-      if (!organizationId || !cloudToken) {
+      if (!organizationId) {
         return res
           .status(400)
           .json({ error: "ID da organização e cloudToken são obrigatórios" });
       }
 
-      const result = await OrganizationLicenseService.validateCloudToken(
+      const result = await OrganizationLicenseService.validateLicense(
         organizationId as string,
-        cloudToken as string,
         teamId as string
       );
 
