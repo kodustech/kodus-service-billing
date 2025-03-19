@@ -13,6 +13,15 @@ export class OrganizationLicenseService {
     organizationId: string,
     teamId: string
   ): Promise<OrganizationLicense> {
+    // Verifica se já existe uma licença para essa organização e time
+    const existingLicense = await OrganizationLicenseRepository.findOne({
+      where: { organizationId, teamId }
+    });
+
+    if (existingLicense) {
+      throw new Error("Já existe uma licença para esta organização e time");
+    }
+
     const trialDays = parseInt(process.env.TRIAL_DAYS || "14");
     const trialEnd = new Date();
     trialEnd.setDate(trialEnd.getDate() + trialDays);
@@ -45,47 +54,6 @@ export class OrganizationLicenseService {
       .digest("hex");
   }
 
-  static async validateCloudToken(
-    organizationId: string,
-    cloudToken: string,
-    teamId: string
-  ): Promise<boolean> {
-    const license = await OrganizationLicenseRepository.findOne({
-      where: { organizationId, cloudToken, teamId },
-    });
-
-    if (!license) return false;
-
-    // Se estiver em trial, verificar se expirou
-    if (license.subscriptionStatus === SubscriptionStatus.TRIAL) {
-      const now = new Date();
-      if (now > license.trialEnd) {
-        license.subscriptionStatus = SubscriptionStatus.EXPIRED;
-        await OrganizationLicenseRepository.save(license);
-        return false;
-      }
-    }
-
-    // Verificar se o status é válido para uso
-    return [SubscriptionStatus.TRIAL, SubscriptionStatus.ACTIVE].includes(
-      license.subscriptionStatus
-    );
-  }
-
-  static async updateExpiredTrials(): Promise<number> {
-    const now = new Date();
-
-    const result = await OrganizationLicenseRepository.createQueryBuilder()
-      .update(OrganizationLicense)
-      .set({ subscriptionStatus: SubscriptionStatus.EXPIRED })
-      .where("subscriptionStatus = :status", {
-        status: SubscriptionStatus.TRIAL,
-      })
-      .andWhere("trialEnd < :now", { now })
-      .execute();
-
-    return result.affected || 0;
-  }
 
   static async assignLicensesToUsers(
     organizationId: string,
@@ -282,7 +250,7 @@ export class OrganizationLicenseService {
     organizationId: string,
     userId: string,
     teamId: string
-  ): Promise<UserLicense> {
+  ): Promise<any> {
     const license = await UserLicenseRepository.findOne({
       where: {
         git_id: userId,
@@ -290,6 +258,50 @@ export class OrganizationLicenseService {
       },
     });
 
-    return license;
+    return { git_id: userId, isValid: !!license };
+  }
+
+  static async validateCloudToken(
+    organizationId: string,
+    cloudToken: string,
+    teamId: string
+  ): Promise<{
+    valid: boolean;
+    subscriptionStatus?: SubscriptionStatus;
+    trialEnd?: Date;
+  }> {
+    const license = await OrganizationLicenseRepository.findOne({
+      where: { organizationId, cloudToken, teamId },
+    });
+
+    if (!license) return { valid: false };
+
+    // Se estiver em trial, verificar se expirou
+    if (license.subscriptionStatus === SubscriptionStatus.TRIAL) {
+      const now = new Date();
+      if (now > license.trialEnd) {
+        license.subscriptionStatus = SubscriptionStatus.EXPIRED;
+        await OrganizationLicenseRepository.save(license);
+        return { 
+          valid: false,
+          subscriptionStatus: SubscriptionStatus.EXPIRED
+        };
+      }
+
+      // Se está em trial e não expirou, retorna com a data
+      return {
+        valid: true,
+        subscriptionStatus: SubscriptionStatus.TRIAL,
+        trialEnd: license.trialEnd
+      };
+    }
+
+    // Para outros status, retorna apenas o status e validade
+    return {
+      valid: [SubscriptionStatus.TRIAL, SubscriptionStatus.ACTIVE].includes(
+        license.subscriptionStatus
+      ),
+      subscriptionStatus: license.subscriptionStatus
+    };
   }
 }
