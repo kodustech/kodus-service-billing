@@ -7,6 +7,7 @@ import {
 import { UserLicense, GitTool, LicenseStatus } from "../entities/UserLicense";
 import { In } from "typeorm";
 import crypto from "crypto";
+import { clearCacheByPrefix } from "../config/utils/cache";
 
 export class OrganizationLicenseService {
   static async createTrialLicense(
@@ -35,7 +36,14 @@ export class OrganizationLicenseService {
       assignedLicenses: 0,
     });
 
-    return await OrganizationLicenseRepository.save(license);
+    const savedLicense = await OrganizationLicenseRepository.save(license);
+    
+    // Limpar cache para garantir que as consultas futuras obtenham dados atualizados
+    clearCacheByPrefix("org-license");
+    clearCacheByPrefix("user-license");
+    clearCacheByPrefix("users-license");
+    
+    return savedLicense;
   }
 
   static async assignLicensesToUsers(
@@ -197,11 +205,38 @@ export class OrganizationLicenseService {
                 : "Erro ao criar nova licença",
           });
         }
+      } else {
+        // Criar licença inativa (não consome quota de licenças disponíveis)
+        try {
+          const userLicense = UserLicenseRepository.create({
+            git_id: user.gitId,
+            git_tool: user.gitTool,
+            licenseStatus: LicenseStatus.INACTIVE, // Garantir que é INACTIVE
+            assignedAt: new Date(),
+            organizationLicenseId: orgLicense.id,
+          });
+
+          const savedLicense = await UserLicenseRepository.save(userLicense);
+          results.successful.push(savedLicense);
+        } catch (error) {
+          results.failed.push({
+            user,
+            error:
+              error instanceof Error
+                ? error.message
+                : "Erro ao criar licença inativa",
+          });
+        }
       }
     }
 
     // Salvar o novo contador de licenças atribuídas
     await OrganizationLicenseRepository.save(orgLicense);
+
+    // Limpar cache para garantir que as consultas futuras obtenham dados atualizados
+    clearCacheByPrefix("org-license");
+    clearCacheByPrefix("user-license");
+    clearCacheByPrefix("users-license");
 
     return results;
   }
@@ -295,6 +330,7 @@ export class OrganizationLicenseService {
   ): Promise<{ git_id: string }[]> {
     const licenses = await UserLicenseRepository.find({
       where: {
+        licenseStatus: LicenseStatus.ACTIVE,
         organizationLicense: {
           organizationId,
           teamId,

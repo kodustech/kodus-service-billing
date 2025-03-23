@@ -2,6 +2,7 @@ import Stripe from "stripe";
 import "dotenv/config";
 import { OrganizationLicenseRepository } from "../repositories/OrganizationLicenseRepository";
 import { SubscriptionStatus } from "../entities/OrganizationLicense";
+import { clearCacheByPrefix } from "../config/utils/cache";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "");
 
@@ -91,6 +92,11 @@ export class StripeService {
     }
 
     await OrganizationLicenseRepository.save(license);
+    
+    // Limpar cache para garantir que as consultas futuras obtenham dados atualizados
+    clearCacheByPrefix("org-license");
+    clearCacheByPrefix("user-license");
+    clearCacheByPrefix("users-license");
   }
 
   private static async handlePaymentFailed(
@@ -106,6 +112,11 @@ export class StripeService {
 
     license.subscriptionStatus = SubscriptionStatus.PAYMENT_FAILED;
     await OrganizationLicenseRepository.save(license);
+    
+    // Limpar cache para garantir que as consultas futuras obtenham dados atualizados
+    clearCacheByPrefix("org-license");
+    clearCacheByPrefix("user-license");
+    clearCacheByPrefix("users-license");
 
     // TODO: Enviar notificação ao cliente
   }
@@ -121,6 +132,11 @@ export class StripeService {
 
     license.subscriptionStatus = SubscriptionStatus.CANCELED;
     await OrganizationLicenseRepository.save(license);
+    
+    // Limpar cache para garantir que as consultas futuras obtenham dados atualizados
+    clearCacheByPrefix("org-license");
+    clearCacheByPrefix("user-license");
+    clearCacheByPrefix("users-license");
 
     // TODO: Expirar licenças de usuários
   }
