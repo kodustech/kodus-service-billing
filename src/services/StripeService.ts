@@ -11,7 +11,7 @@ export class StripeService {
   static async createCheckoutSession(
     organizationId: string,
     quantity: number,
-    teamId: string  
+    teamId: string
   ): Promise<string> {
     // Buscar a licença da organização
     const license = await OrganizationLicenseRepository.findOne({
@@ -56,6 +56,12 @@ export class StripeService {
         await this.handlePaymentFailed(event.data.object as Stripe.Invoice);
         break;
 
+      case "customer.subscription.updated":
+        await this.handleSubscriptionUpdated(
+          event.data.object as Stripe.Subscription
+        );
+        break;
+
       case "customer.subscription.deleted":
         await this.handleSubscriptionCanceled(
           event.data.object as Stripe.Subscription
@@ -92,7 +98,7 @@ export class StripeService {
     }
 
     await OrganizationLicenseRepository.save(license);
-    
+
     // Limpar cache para garantir que as consultas futuras obtenham dados atualizados
     clearCacheByPrefix("org-license");
     clearCacheByPrefix("user-license");
@@ -112,13 +118,51 @@ export class StripeService {
 
     license.subscriptionStatus = SubscriptionStatus.PAYMENT_FAILED;
     await OrganizationLicenseRepository.save(license);
-    
+
     // Limpar cache para garantir que as consultas futuras obtenham dados atualizados
     clearCacheByPrefix("org-license");
     clearCacheByPrefix("user-license");
     clearCacheByPrefix("users-license");
 
     // TODO: Enviar notificação ao cliente
+  }
+
+  private static async handleSubscriptionUpdated(
+    subscription: Stripe.Subscription
+  ): Promise<void> {
+    const license = await OrganizationLicenseRepository.findOne({
+      where: { stripeSubscriptionId: subscription.id },
+    });
+
+    if (!license) return;
+
+    // Atualizar o status da assinatura
+    if (subscription.status === "active") {
+      license.subscriptionStatus = SubscriptionStatus.ACTIVE;
+    } else if (
+      subscription.status === "past_due" ||
+      subscription.status === "unpaid"
+    ) {
+      license.subscriptionStatus = SubscriptionStatus.PAYMENT_FAILED;
+    } else if (subscription.status === "canceled") {
+      license.subscriptionStatus = SubscriptionStatus.CANCELED;
+    }
+
+    // Atualizar o número total de licenças se houver mudança
+    const lineItems = await stripe.subscriptionItems.list({
+      subscription: subscription.id,
+    });
+
+    if (lineItems.data.length > 0) {
+      license.totalLicenses = lineItems.data[0].quantity || 0;
+    }
+
+    await OrganizationLicenseRepository.save(license);
+
+    // Limpar cache para garantir que as consultas futuras obtenham dados atualizados
+    clearCacheByPrefix("org-license");
+    clearCacheByPrefix("user-license");
+    clearCacheByPrefix("users-license");
   }
 
   private static async handleSubscriptionCanceled(
@@ -132,7 +176,7 @@ export class StripeService {
 
     license.subscriptionStatus = SubscriptionStatus.CANCELED;
     await OrganizationLicenseRepository.save(license);
-    
+
     // Limpar cache para garantir que as consultas futuras obtenham dados atualizados
     clearCacheByPrefix("org-license");
     clearCacheByPrefix("user-license");
@@ -141,7 +185,10 @@ export class StripeService {
     // TODO: Expirar licenças de usuários
   }
 
-  static async createCustomerPortalSession(organizationId: string, teamId: string): Promise<string> {
+  static async createCustomerPortalSession(
+    organizationId: string,
+    teamId: string
+  ): Promise<string> {
     // Buscar a licença da organização
     const license = await OrganizationLicenseRepository.findOne({
       where: { organizationId, teamId },
