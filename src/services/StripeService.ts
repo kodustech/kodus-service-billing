@@ -28,6 +28,10 @@ export class StripeService {
         {
           price: process.env.STRIPE_PRICE_ID,
           quantity: quantity,
+          adjustable_quantity: {
+            enabled: true,
+            minimum: 1,
+          },
         },
       ],
       mode: "subscription",
