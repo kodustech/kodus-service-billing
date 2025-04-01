@@ -6,7 +6,6 @@ import cors from "cors";
 import { initializeDatabase } from "./config/database";
 import subscriptionRoutes from "./routes/subscription.routes";
 import corsOptions from "./config/utils/cors";
-import cron from "./cron";
 import "dotenv/config";
 
 const app: Express = express();
@@ -18,7 +17,8 @@ initializeDatabase()
     console.log("Database initialized successfully!");
 
     // Iniciar cron jobs após conexão com o banco
-    cron;
+    console.log("Starting cron jobs...");
+    import("./cron");
   })
   .catch((err) => {
     console.error("Error during database initialization", err);

@@ -5,7 +5,7 @@ import {
   SubscriptionStatus,
 } from "../entities/OrganizationLicense";
 import { UserLicense, GitTool, LicenseStatus } from "../entities/UserLicense";
-import { In } from "typeorm";
+import { In, LessThan } from "typeorm";
 import crypto from "crypto";
 import { clearCacheByPrefix } from "../config/utils/cache";
 
@@ -349,5 +349,22 @@ export class OrganizationLicenseService {
     return licenses.map((license) => ({
       git_id: license.git_id,
     }));
+  }
+
+  static async updateExpiredTrials(): Promise<number> {
+    const now = new Date();
+    const expiredTrials = await OrganizationLicenseRepository.find({
+      where: {
+        subscriptionStatus: SubscriptionStatus.TRIAL,
+        trialEnd: LessThan(now)
+      }
+    });
+
+    for (const trial of expiredTrials) {
+      trial.subscriptionStatus = SubscriptionStatus.EXPIRED;
+    }
+
+    await OrganizationLicenseRepository.save(expiredTrials);
+    return expiredTrials.length;
   }
 }
