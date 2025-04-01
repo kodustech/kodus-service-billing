@@ -3,11 +3,11 @@ import "dotenv/config";
 import { UserLicense } from "../entities/UserLicense";
 import { OrganizationLicense } from "../entities/OrganizationLicense";
 
+const isDev = process.env.API_DATABASE_ENV === "development";
+
 export const AppDataSource = new DataSource({
   type: "postgres",
-  host: process.env.API_DATABASE_ENV === "development" 
-    ? "localhost" 
-    : process.env.PG_DB_HOST,
+  host: isDev ? "localhost" : process.env.PG_DB_HOST,
   port: parseInt(process.env.PG_DB_PORT || "5432"),
   username: process.env.PG_DB_USERNAME,
   password: process.env.PG_DB_PASSWORD,
@@ -15,38 +15,45 @@ export const AppDataSource = new DataSource({
   schema: process.env.PG_DB_SCHEMA || "subscription",
   synchronize: process.env.API_BILLING_NODE_ENV === "development",
   logging: process.env.API_BILLING_NODE_ENV === "development",
+  ssl: !isDev
+    ? {
+        rejectUnauthorized: false, // necessário para RDS
+      }
+    : false,
   entities: [UserLicense, OrganizationLicense],
   migrations: ["src/migrations/**/*.ts"],
   subscribers: ["src/subscribers/**/*.ts"],
 });
 
-// Função para inicializar o banco com o schema
 export const initializeDatabase = async () => {
-  // Primeiro, conecte sem especificar o schema
+  const isDev = process.env.API_DATABASE_ENV === "development";
+
   const tempDataSource = new DataSource({
     type: "postgres",
-    host: process.env.PG_DB_HOST || "db_postgres",
+    host: isDev ? "localhost" : process.env.PG_DB_HOST,
     port: parseInt(process.env.PG_DB_PORT || "5432"),
     username: process.env.PG_DB_USERNAME,
     password: process.env.PG_DB_PASSWORD,
     database: process.env.PG_DB_DATABASE,
+    ssl: !isDev
+      ? {
+          rejectUnauthorized: false,
+        }
+      : false,
   });
 
   await tempDataSource.initialize();
 
   try {
-    // Cria o schema se não existir
     const schema = process.env.PG_DB_SCHEMA || "subscription";
     await tempDataSource.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
     console.log(`Schema "${schema}" created or already exists`);
   } catch (error) {
     console.error("Error creating schema:", error);
   } finally {
-    // Fecha a conexão temporária
     await tempDataSource.destroy();
   }
 
-  // Agora inicializa o AppDataSource com o schema
   await AppDataSource.initialize();
   console.log("Main DataSource initialized successfully");
 };
