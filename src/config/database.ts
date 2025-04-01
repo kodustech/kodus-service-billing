@@ -1,4 +1,5 @@
 import { DataSource } from "typeorm";
+import { join } from 'path';
 import "dotenv/config";
 import { UserLicense } from "../entities/UserLicense";
 import { OrganizationLicense } from "../entities/OrganizationLicense";
@@ -21,8 +22,8 @@ export const AppDataSource = new DataSource({
       }
     : false,
   entities: [UserLicense, OrganizationLicense],
-  migrations: ["src/migrations/**/*.ts"],
-  subscribers: ["src/subscribers/**/*.ts"],
+  migrations: [join(__dirname, './migrations/*{.ts,.js}')],
+  subscribers: [join(__dirname, './subscribers/*{.ts,.js}')],
 });
 
 export const initializeDatabase = async () => {

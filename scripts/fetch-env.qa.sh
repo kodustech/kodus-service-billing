@@ -18,6 +18,9 @@ KEYS=(
     "/qa/kodus-service-billing/CLOUD_TOKEN_SECRET"
     "/qa/kodus-service-billing/CORS_URLS"
     "/qa/kodus-service-billing/FRONTEND_URL"
+
+    "/qa/kodus-service-billing/API_BILLING_NODE_ENV"
+    "/qa/kodus-service-billing/API_DATABASE_ENV"
 )
 
 # Lista de todas as chaves que você precisa
