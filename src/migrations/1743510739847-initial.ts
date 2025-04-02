@@ -19,7 +19,7 @@ export class Initial1743510739847 implements MigrationInterface {
                 "organizationId" character varying NOT NULL,
                 "teamId" character varying NOT NULL,
                 "subscriptionStatus" "billing"."organization_licenses_subscriptionstatus_enum" NOT NULL DEFAULT 'trial',
-                "trialEnd" TIMESTAMP NOT NULL,
+                "trialEnd" TIMESTAMP NULL,
                 "stripeCustomerId" character varying,
                 "stripeSubscriptionId" character varying,
                 "totalLicenses" integer NOT NULL DEFAULT '0',

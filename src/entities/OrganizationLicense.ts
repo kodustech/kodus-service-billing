@@ -32,7 +32,7 @@ export class OrganizationLicense {
   })
   subscriptionStatus: SubscriptionStatus;
 
-  @Column({ type: "timestamp" })
+  @Column({ type: "timestamp", nullable: true })
   trialEnd: Date;
 
   @Column({ nullable: true })
