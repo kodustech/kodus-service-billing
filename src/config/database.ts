@@ -8,7 +8,7 @@ const isDev = process.env.API_DATABASE_ENV === "development";
 
 export const AppDataSource = new DataSource({
   type: "postgres",
-  host: isDev ? "localhost" : process.env.PG_DB_HOST,
+  host: process.env.PG_DB_HOST || "db_postgres",
   port: parseInt(process.env.PG_DB_PORT || "5432"),
   username: process.env.PG_DB_USERNAME,
   password: process.env.PG_DB_PASSWORD,
@@ -31,7 +31,7 @@ export const initializeDatabase = async () => {
 
   const tempDataSource = new DataSource({
     type: "postgres",
-    host: isDev ? "localhost" : process.env.PG_DB_HOST,
+    host: process.env.PG_DB_HOST || "db_postgres",
     port: parseInt(process.env.PG_DB_PORT || "5432"),
     username: process.env.PG_DB_USERNAME,
     password: process.env.PG_DB_PASSWORD,
