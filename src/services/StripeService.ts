@@ -35,6 +35,7 @@ export class StripeService {
         },
       ],
       mode: "subscription",
+      allow_promotion_codes: true,
       success_url: `${process.env.FRONTEND_URL}/subscription/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${process.env.FRONTEND_URL}/subscription/cancel`,
       client_reference_id: organizationId,
