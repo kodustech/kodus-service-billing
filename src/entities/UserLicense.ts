@@ -17,6 +17,7 @@ export enum GitTool {
   GITHUB = "github",
   GITLAB = "gitlab",
   BITBUCKET = "bitbucket",
+  AZURE_REPOS = "azure_repos",
 }
 
 @Entity("user_licenses")
