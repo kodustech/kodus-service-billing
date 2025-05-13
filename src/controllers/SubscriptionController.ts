@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { OrganizationLicenseService } from "../services/OrganizationLicenseService";
 import { StripeService } from "../services/StripeService";
 import Stripe from "stripe";
+import validateAdminToken from "../config/utils/adminToken";
 
 export class SubscriptionController {
   static async createTrial(req: Request, res: Response): Promise<Response> {
@@ -229,6 +230,47 @@ export class SubscriptionController {
     } catch (error) {
       return res.status(400).json({ 
         error: error instanceof Error ? error.message : 'Erro ao gerar URL do portal' 
+      });
+    }
+  }
+
+  static async updateTrial(req: Request, res: Response): Promise<Response> {
+    try {
+      const { organizationId, teamId, trialEnd, adminToken } = req.body;
+
+      if (!organizationId || !teamId || !trialEnd || !adminToken) {
+        return res.status(400).json({
+          error: "ID da organização, teamId, trialEnd e token de admin são obrigatórios",
+        });
+      }
+
+      const isValidAdmin = validateAdminToken(adminToken);
+
+      if (!isValidAdmin) {
+        return res.status(401).json({
+          error: "Token de admin inválido",
+        });
+      }
+
+      const dateRegex = /^\d{4}-\d{2}-\d{2}(T\d{2}(:\d{2}){0,1})?\.\d{3}Z$/;
+      if (!dateRegex.test(trialEnd) && !/^\d{4}-\d{2}-\d{2}$/.test(trialEnd)) {
+        return res.status(400).json({
+          error: "A data de fim do trial deve estar no formato ISO 8601 (YYYY-MM-DDTHH:MM:SS.SSSZ) ou YYYY-MM-DD",
+        });
+      }
+     
+
+      const updatedLicense = await OrganizationLicenseService.updateTrial(
+        organizationId,
+        teamId,
+        new Date(trialEnd)
+      );
+
+      return res.status(200).json(updatedLicense);
+    } catch (error) {
+      console.error("Erro ao atualizar trial:", error);
+      return res.status(500).json({
+        error: "Erro ao atualizar trial",
       });
     }
   }

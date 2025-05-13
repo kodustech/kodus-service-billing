@@ -367,4 +367,25 @@ export class OrganizationLicenseService {
     await OrganizationLicenseRepository.save(expiredTrials);
     return expiredTrials.length;
   }
+
+
+  static async updateTrial(orgId: string, teamId: string, newTrialEnd: Date){
+    const license = await OrganizationLicenseRepository.findOne({
+      where: { organizationId: orgId, teamId },
+    });
+
+    if (!license) {
+      throw new Error("Licença não encontrada");
+    }
+
+    license.trialEnd = newTrialEnd;
+    await OrganizationLicenseRepository.save(license);
+
+    // Limpar cache para garantir que as consultas futuras obtenham dados atualizados
+    clearCacheByPrefix("org-license");
+    clearCacheByPrefix("user-license");
+    clearCacheByPrefix("users-license");
+
+    return license;
+  }
 }

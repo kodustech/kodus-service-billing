@@ -21,6 +21,8 @@ KEYS=(
 
     "/prod/kodus-service-billing/API_BILLING_NODE_ENV"
     "/prod/kodus-service-billing/API_DATABASE_ENV"
+
+    "/prod/kodus-service-billing/ADMIN_TOKEN"
 )
 
 # Lista de todas as chaves que você precisa

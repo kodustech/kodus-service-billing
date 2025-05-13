@@ -52,4 +52,8 @@ router.get(
   }
 );
 
+router.post("/update-trial", async (req, res) => {
+  await SubscriptionController.updateTrial(req, res);
+});
+
 export default router;
