@@ -93,10 +93,7 @@ export class SubscriptionController {
     }
   }
 
-  static async validateLicense(
-    req: Request,
-    res: Response
-  ): Promise<Response> {
+  static async validateLicense(req: Request, res: Response): Promise<Response> {
     try {
       const { organizationId, teamId } = req.query;
 
@@ -120,7 +117,7 @@ export class SubscriptionController {
 
   static async assignLicense(req: Request, res: Response): Promise<Response> {
     try {
-      const { organizationId, users, teamId } = req.body;
+      const { organizationId, users, teamId, editedBy, userName } = req.body;
 
       if (!organizationId || !teamId) {
         return res.status(400).json({
@@ -151,6 +148,18 @@ export class SubscriptionController {
         teamId,
         usersArray
       );
+
+      if (results.successful.length > 0) {
+        OrganizationLicenseService.notifyUserStatusChanges(
+          results.successful,
+          organizationId,
+          teamId,
+          editedBy,
+          userName
+        ).catch((error) => {
+          console.error("Erro ao tentar registrar log de status:", error);
+        });
+      }
 
       return res.status(201).json(results);
     } catch (error) {
@@ -221,15 +230,21 @@ export class SubscriptionController {
 
   static async getCustomerPortalUrl(req: Request, res: Response) {
     try {
-      const organizationId = req.params.organizationId; 
+      const organizationId = req.params.organizationId;
       const teamId = req.params.teamId;
-      
-      const url = await StripeService.createCustomerPortalSession(organizationId, teamId);
-      
+
+      const url = await StripeService.createCustomerPortalSession(
+        organizationId,
+        teamId
+      );
+
       return res.json({ url });
     } catch (error) {
-      return res.status(400).json({ 
-        error: error instanceof Error ? error.message : 'Erro ao gerar URL do portal' 
+      return res.status(400).json({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Erro ao gerar URL do portal",
       });
     }
   }
@@ -240,7 +255,8 @@ export class SubscriptionController {
 
       if (!organizationId || !teamId || !trialEnd || !adminToken) {
         return res.status(400).json({
-          error: "ID da organização, teamId, trialEnd e token de admin são obrigatórios",
+          error:
+            "ID da organização, teamId, trialEnd e token de admin são obrigatórios",
         });
       }
 
@@ -255,10 +271,10 @@ export class SubscriptionController {
       const dateRegex = /^\d{4}-\d{2}-\d{2}(T\d{2}(:\d{2}){0,1})?\.\d{3}Z$/;
       if (!dateRegex.test(trialEnd) && !/^\d{4}-\d{2}-\d{2}$/.test(trialEnd)) {
         return res.status(400).json({
-          error: "A data de fim do trial deve estar no formato ISO 8601 (YYYY-MM-DDTHH:MM:SS.SSSZ) ou YYYY-MM-DD",
+          error:
+            "A data de fim do trial deve estar no formato ISO 8601 (YYYY-MM-DDTHH:MM:SS.SSSZ) ou YYYY-MM-DD",
         });
       }
-     
 
       const updatedLicense = await OrganizationLicenseService.updateTrial(
         organizationId,
