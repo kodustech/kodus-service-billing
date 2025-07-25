@@ -2,7 +2,6 @@
  * Utilitário para construção de URLs de APIs externas
  * Considera diferentes ambientes e configurações de deployment
  */
-
 export interface UrlBuilderOptions {
   hostname?: string;
   port?: string;
@@ -23,8 +22,6 @@ export function isProduction(): boolean {
 export function isDockerEnvironment(): boolean {
   return !!process.env.GLOBAL_API_CONTAINER_NAME;
 }
-
-
 
 /**
  * Constrói URL completa considerando protocolo e porta
@@ -90,16 +87,3 @@ export function buildParametrizedUrl(
   
   return finalUrl;
 }
-
-/**
- * Valida se uma URL é acessível (para debugging)
- */
-export function logUrlInfo(url: string): void {
-  console.log(`🔗 URL construída: ${url}`);
-  console.log(`📊 Ambiente: ${isProduction() ? 'PRODUÇÃO' : 'DESENVOLVIMENTO'}`);
-  console.log(`🐳 Docker: ${isDockerEnvironment() ? 'SIM' : 'NÃO'}`);
-  
-  if (isDockerEnvironment()) {
-    console.log(`📦 Container de destino: ${process.env.GLOBAL_API_CONTAINER_NAME}`);
-  }
-} 
