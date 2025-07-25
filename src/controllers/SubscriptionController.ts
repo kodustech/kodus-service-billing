@@ -152,6 +152,12 @@ export class SubscriptionController {
         usersArray
       );
 
+      if (results.successful.length > 0) {
+        OrganizationLicenseService.notifyUserStatusChanges(results.successful, organizationId, teamId).catch((error) => {
+          console.error("Erro ao tentar registrar log de status:", error);
+        });
+      }
+
       return res.status(201).json(results);
     } catch (error) {
       console.error("Erro ao atribuir licença(s):", error);

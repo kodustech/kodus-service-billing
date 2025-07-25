@@ -6,8 +6,9 @@ import {
 } from "../entities/OrganizationLicense";
 import { UserLicense, GitTool, LicenseStatus } from "../entities/UserLicense";
 import { In, LessThan } from "typeorm";
-import crypto from "crypto";
 import { clearCacheByPrefix } from "../config/utils/cache";
+import { buildLogApiUrl, isProduction, isDockerEnvironment, logUrlInfo } from "../config/utils/urlBuilder";
+import axios from "axios";
 
 export class OrganizationLicenseService {
   static async createTrialLicense(
@@ -239,6 +240,40 @@ export class OrganizationLicenseService {
     clearCacheByPrefix("users-license");
 
     return results;
+  }
+
+  /**
+   * Notifica a API de logs sobre mudanças de status dos usuários
+   */
+  static async notifyUserStatusChanges(
+    userLicenses: UserLicense[],
+    organizationId: string,
+    teamId: string
+  ): Promise<void> {
+    try {
+      const userStatusChanges = userLicenses.map((license) => ({
+        gitId: license.git_id,
+        gitTool: license.git_tool,
+        licenseStatus: license.licenseStatus,
+        organizationId,
+        teamId,
+      }));
+
+      const payload = {
+        userStatusChanges,
+      };
+
+      const apiUrl = buildLogApiUrl('/user-log/status-change');
+
+      await axios.post(apiUrl, payload, {
+        headers: {
+          "Content-Type": "application/json",
+        },
+        timeout: 3000, 
+      });
+    } catch (error) {
+      throw new Error("Erro ao registrar log de mudanças de status:", error);
+    }
   }
 
   // Mantemos o método original para compatibilidade e uso interno
