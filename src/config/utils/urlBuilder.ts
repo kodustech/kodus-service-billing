@@ -56,12 +56,12 @@ export function createApiUrl(options: UrlBuilderOptions): string {
  * Constrói URL para chamadas para a API de logs
  */
 export function buildLogApiUrl(path: string = ''): string {
-  const hostname = process.env.WEB_HOSTNAME_API;
-  const port = process.env.WEB_PORT_API;
+  const hostname = process.env.API_BILLING_HOSTNAME_API_ORCHESTRATOR;
+  const port = process.env.API_BILLING_PORT_API_ORCHESTRATOR;
   
   if (!hostname || !port) {
     throw new Error(
-      'Variáveis de ambiente WEB_HOSTNAME_API e WEB_PORT_API são obrigatórias'
+      'Variáveis de ambiente API_BILLING_HOSTNAME_API_ORCHESTRATOR e API_BILLING_PORT_API_ORCHESTRATOR são obrigatórias'
     );
   }
   

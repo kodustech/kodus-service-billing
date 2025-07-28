@@ -22,6 +22,10 @@ KEYS=(
     "/qa/kodus-service-billing/API_BILLING_NODE_ENV"
     "/qa/kodus-service-billing/API_DATABASE_ENV"
     "/qa/kodus-service-billing/ADMIN_TOKEN"
+
+    "/qa/kodus-service-billing/API_BILLING_HOSTNAME_API_ORCHESTRATOR"
+    "/qa/kodus-service-billing/API_BILLING_PORT_API_ORCHESTRATOR"
+    "/qa/kodus-service-billing/GLOBAL_API_CONTAINER_NAME"
 )
 
 # Lista de todas as chaves que você precisa
