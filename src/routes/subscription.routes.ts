@@ -56,4 +56,8 @@ router.post("/update-trial", async (req, res) => {
   await SubscriptionController.updateTrial(req, res);
 });
 
+router.post("/migrate-to-free", async (req, res) => {
+  await SubscriptionController.migrateToFreePlan(req, res);
+});
+
 export default router;

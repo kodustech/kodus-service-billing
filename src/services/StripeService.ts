@@ -1,17 +1,45 @@
 import Stripe from "stripe";
 import "dotenv/config";
 import { OrganizationLicenseRepository } from "../repositories/OrganizationLicenseRepository";
-import { SubscriptionStatus } from "../entities/OrganizationLicense";
+import { SubscriptionStatus, PlanType } from "../entities/OrganizationLicense";
 import { clearCacheByPrefix } from "../config/utils/cache";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "");
 
 export class StripeService {
+  private static getPriceIdForPlan(planType: PlanType): string {
+    const priceMap = {
+      [PlanType.TEAMS_BYOK]: process.env.STRIPE_PRICE_ID_TEAMS_BYOK,
+      [PlanType.TEAMS_MANAGED]: process.env.STRIPE_PRICE_ID_TEAMS_MANAGED,
+      [PlanType.TEAMS_MANAGED_LEGACY]: process.env.STRIPE_PRICE_ID_TEAMS_MANAGED_LEGACY || process.env.STRIPE_PRICE_ID,
+      [PlanType.ENTERPRISE_BYOK]: process.env.STRIPE_PRICE_ID_ENTERPRISE_BYOK,
+      [PlanType.ENTERPRISE_MANAGED]: process.env.STRIPE_PRICE_ID_ENTERPRISE_MANAGED,
+    };
+    
+    return priceMap[planType] || process.env.STRIPE_PRICE_ID || process.env.STRIPE_PRICE_ID_TEAMS_MANAGED_LEGACY;
+  }
+
+  private static getPlanTypeByPriceId(priceId?: string): PlanType {
+    if (!priceId) return PlanType.TEAMS_MANAGED_LEGACY;
+    
+    if (priceId === process.env.STRIPE_PRICE_ID_TEAMS_BYOK) return PlanType.TEAMS_BYOK;
+    if (priceId === process.env.STRIPE_PRICE_ID_TEAMS_MANAGED) return PlanType.TEAMS_MANAGED;
+    if (priceId === process.env.STRIPE_PRICE_ID_TEAMS_MANAGED_LEGACY) return PlanType.TEAMS_MANAGED_LEGACY;
+    if (priceId === process.env.STRIPE_PRICE_ID_ENTERPRISE_BYOK) return PlanType.ENTERPRISE_BYOK;
+    if (priceId === process.env.STRIPE_PRICE_ID_ENTERPRISE_MANAGED) return PlanType.ENTERPRISE_MANAGED;
+    
+    // Fallback para o STRIPE_PRICE_ID original (assumindo que é teams_managed_legacy)
+    if (priceId === process.env.STRIPE_PRICE_ID) return PlanType.TEAMS_MANAGED_LEGACY;
+    
+    return PlanType.TEAMS_MANAGED_LEGACY;
+  }
+
   // Criar sessão de checkout para assinatura
   static async createCheckoutSession(
     organizationId: string,
     quantity: number,
-    teamId: string
+    teamId: string,
+    planType: PlanType = PlanType.TEAMS_MANAGED_LEGACY
   ): Promise<string> {
     // Buscar a licença da organização
     const license = await OrganizationLicenseRepository.findOne({
@@ -26,7 +54,7 @@ export class StripeService {
       payment_method_types: ["card"],
       line_items: [
         {
-          price: process.env.STRIPE_PRICE_ID,
+          price: this.getPriceIdForPlan(planType),
           quantity: quantity,
           adjustable_quantity: {
             enabled: true,
@@ -43,6 +71,7 @@ export class StripeService {
         organizationId: organizationId,
         teamId: teamId,
         licenseId: license.id,
+        planType: planType,
       },
     });
 
@@ -100,6 +129,10 @@ export class StripeService {
     const lineItems = await stripe.checkout.sessions.listLineItems(session.id);
     if (lineItems.data.length > 0) {
       license.totalLicenses = lineItems.data[0].quantity || 0;
+      
+      // Identificar plano pelo Price ID
+      const priceId = lineItems.data[0]?.price?.id;
+      license.planType = this.getPlanTypeByPriceId(priceId);
     }
 
     await OrganizationLicenseRepository.save(license);

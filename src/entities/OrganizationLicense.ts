@@ -14,6 +14,15 @@ export enum SubscriptionStatus {
   EXPIRED = "expired",
 }
 
+export enum PlanType {
+  FREE_BYOK = "free_byok",
+  TEAMS_BYOK = "teams_byok",
+  TEAMS_MANAGED = "teams_managed",
+  TEAMS_MANAGED_LEGACY = "teams_managed_legacy",
+  ENTERPRISE_BYOK = "enterprise_byok",
+  ENTERPRISE_MANAGED = "enterprise_managed",
+}
+
 @Entity("organization_licenses")
 export class OrganizationLicense {
   @PrimaryGeneratedColumn("uuid")
@@ -31,6 +40,13 @@ export class OrganizationLicense {
     default: SubscriptionStatus.TRIAL,
   })
   subscriptionStatus: SubscriptionStatus;
+
+  @Column({
+    type: "enum",
+    enum: PlanType,
+    default: PlanType.TEAMS_MANAGED_LEGACY,
+  })
+  planType: PlanType;
 
   @Column({ type: "timestamp", nullable: true })
   trialEnd: Date;

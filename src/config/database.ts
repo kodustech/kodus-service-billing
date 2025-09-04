@@ -22,7 +22,7 @@ export const AppDataSource = new DataSource({
       }
     : false,
   entities: [UserLicense, OrganizationLicense],
-  migrations: [join(__dirname, './migrations/*{.ts,.js}')],
+  migrations: [join(__dirname, '../migrations/*{.ts,.js}')],
   subscribers: [join(__dirname, './subscribers/*{.ts,.js}')],
 });
 
