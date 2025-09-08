@@ -17,10 +17,14 @@ export enum SubscriptionStatus {
 export enum PlanType {
   FREE_BYOK = "free_byok",
   TEAMS_BYOK = "teams_byok",
+  TEAMS_BYOK_ANNUAL = "teams_byok_annual",
   TEAMS_MANAGED = "teams_managed",
+  TEAMS_MANAGED_ANNUAL = "teams_managed_annual",
   TEAMS_MANAGED_LEGACY = "teams_managed_legacy",
   ENTERPRISE_BYOK = "enterprise_byok",
+  ENTERPRISE_BYOK_ANNUAL = "enterprise_byok_annual",
   ENTERPRISE_MANAGED = "enterprise_managed",
+  ENTERPRISE_MANAGED_ANNUAL = "enterprise_managed_annual",
 }
 
 @Entity("organization_licenses")

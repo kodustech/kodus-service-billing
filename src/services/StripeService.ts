@@ -10,10 +10,14 @@ export class StripeService {
   private static getPriceIdForPlan(planType: PlanType): string {
     const priceMap = {
       [PlanType.TEAMS_BYOK]: process.env.STRIPE_PRICE_ID_TEAMS_BYOK,
+      [PlanType.TEAMS_BYOK_ANNUAL]: process.env.STRIPE_PRICE_ID_TEAMS_BYOK_ANNUAL,
       [PlanType.TEAMS_MANAGED]: process.env.STRIPE_PRICE_ID_TEAMS_MANAGED,
+      [PlanType.TEAMS_MANAGED_ANNUAL]: process.env.STRIPE_PRICE_ID_TEAMS_MANAGED_ANNUAL,
       [PlanType.TEAMS_MANAGED_LEGACY]: process.env.STRIPE_PRICE_ID_TEAMS_MANAGED_LEGACY || process.env.STRIPE_PRICE_ID,
       [PlanType.ENTERPRISE_BYOK]: process.env.STRIPE_PRICE_ID_ENTERPRISE_BYOK,
+      [PlanType.ENTERPRISE_BYOK_ANNUAL]: process.env.STRIPE_PRICE_ID_ENTERPRISE_BYOK_ANNUAL,
       [PlanType.ENTERPRISE_MANAGED]: process.env.STRIPE_PRICE_ID_ENTERPRISE_MANAGED,
+      [PlanType.ENTERPRISE_MANAGED_ANNUAL]: process.env.STRIPE_PRICE_ID_ENTERPRISE_MANAGED_ANNUAL,
     };
     
     return priceMap[planType] || process.env.STRIPE_PRICE_ID || process.env.STRIPE_PRICE_ID_TEAMS_MANAGED_LEGACY;
@@ -23,10 +27,14 @@ export class StripeService {
     if (!priceId) return PlanType.TEAMS_MANAGED_LEGACY;
     
     if (priceId === process.env.STRIPE_PRICE_ID_TEAMS_BYOK) return PlanType.TEAMS_BYOK;
+    if (priceId === process.env.STRIPE_PRICE_ID_TEAMS_BYOK_ANNUAL) return PlanType.TEAMS_BYOK_ANNUAL;
     if (priceId === process.env.STRIPE_PRICE_ID_TEAMS_MANAGED) return PlanType.TEAMS_MANAGED;
+    if (priceId === process.env.STRIPE_PRICE_ID_TEAMS_MANAGED_ANNUAL) return PlanType.TEAMS_MANAGED_ANNUAL;
     if (priceId === process.env.STRIPE_PRICE_ID_TEAMS_MANAGED_LEGACY) return PlanType.TEAMS_MANAGED_LEGACY;
     if (priceId === process.env.STRIPE_PRICE_ID_ENTERPRISE_BYOK) return PlanType.ENTERPRISE_BYOK;
+    if (priceId === process.env.STRIPE_PRICE_ID_ENTERPRISE_BYOK_ANNUAL) return PlanType.ENTERPRISE_BYOK_ANNUAL;
     if (priceId === process.env.STRIPE_PRICE_ID_ENTERPRISE_MANAGED) return PlanType.ENTERPRISE_MANAGED;
+    if (priceId === process.env.STRIPE_PRICE_ID_ENTERPRISE_MANAGED_ANNUAL) return PlanType.ENTERPRISE_MANAGED_ANNUAL;
     
     // Fallback para o STRIPE_PRICE_ID original (assumindo que é teams_managed_legacy)
     if (priceId === process.env.STRIPE_PRICE_ID) return PlanType.TEAMS_MANAGED_LEGACY;
