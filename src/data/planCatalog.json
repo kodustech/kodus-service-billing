@@ -64,11 +64,7 @@
       "label": "Enterprise Managed",
       "description": "Dedicated managed services to complement Enterprise BYOK.",
       "type": "addon",
-      "features": [
-        "Dedicated success manager",
-        "Priority enterprise support",
-        "Customized onboarding and workflow integration"
-      ]
+      "features": ["Unlimited PRs for a flat monthly fee"]
     }
   ]
 }
