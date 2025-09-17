@@ -1,0 +1,81 @@
+{
+  "plans": [
+    {
+      "id": "free_byok",
+      "label": "Community",
+      "headline": "Free",
+      "description": "The power of AI-driven code reviews, fully self-hosted and open-source.",
+      "type": "plan",
+      "minimumSeats": 1,
+      "features": [
+        "Bring your own key",
+        "Self Hosted or Hosted by Kodus",
+        "Unlimited users",
+        "Unlimited issues on Quality Radar",
+        "Use up to 10 Kody Rules",
+        "Use up to 3 active plugins (coming soon)",
+        "Kody Learnings and Memory",
+        "Kodus MCP (coming soon)",
+        "Discord Community Support"
+      ]
+    },
+    {
+      "id": "teams_byok",
+      "aliases": ["teams_byok_annual"],
+      "label": "Teams",
+      "headline": "$30/dev/month",
+      "description": "The power of AI-driven code reviews, fully self-hosted and open-source.",
+      "type": "plan",
+      "minimumSeats": 5,
+      "features": [
+        "Bring your own key",
+        "Hosted by Kodus",
+        "Unlimited users",
+        "Unlimited issues on Quality Radar",
+        "Use unlimited Kody Rules",
+        "Use unlimited active plugins (coming soon)",
+        "Kody Learnings and Memory",
+        "1-click Autofix (Quality Radar) (coming soon)",
+        "Priority queue for Kody Agents",
+        "Kodus MCP (coming soon)",
+        "Discord Community and Email Support"
+      ]
+    },
+    {
+      "id": "enterprise_managed",
+      "aliases": ["enterprise_managed_annual", "enterprise_byok", "enterprise_byok_annual"],
+      "label": "Enterprise",
+      "headline": "Talk to Sales",
+      "description": "The power of AI-driven code reviews, fully self-hosted and open-source.",
+      "type": "contact",
+      "features": [
+        "Bring your own key",
+        "Self Hosted or Hosted by Kodus",
+        "Unlimited users",
+        "Unlimited issues on Quality Radar",
+        "Use unlimited Kody Rules",
+        "Use unlimited active plugins",
+        "Kody Learnings and Memory",
+        "1-click Autofix (Quality Radar)",
+        "Priority queue for Kody Agents",
+        "Kodus MCP",
+        "RBAC + Audit logs and analytics",
+        "Up to 5 hours month dedicated support with personalized onboarding",
+        "Private Discord Channel and Email Support"
+      ]
+    }
+  ],
+  "addons": [
+    {
+      "id": "teams_managed",
+      "aliases": ["teams_managed_annual"],
+      "label": "AI Compute Add-on",
+      "headline": "+20$/developer/month",
+      "description": "Unlimited PRs for a flat monthly fee.",
+      "type": "addon",
+      "features": [
+        "Unlimited PRs for a flat monthly fee"
+      ]
+    }
+  ]
+}

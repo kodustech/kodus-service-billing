@@ -18,6 +18,13 @@ router.post("/webhook", async (req, res) => {
 });
 
 router.get(
+  "/plans",
+  async (req, res) => {
+    await SubscriptionController.getPlans(req, res);
+  }
+);
+
+router.get(
   "/validate-org-license",
   cacheMiddleware({ ttl: 15 * 60, keyPrefix: "org-license" }),
   async (req, res) => {

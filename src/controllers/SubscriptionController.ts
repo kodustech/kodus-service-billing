@@ -4,6 +4,7 @@ import { StripeService } from "../services/StripeService";
 import { PlanType } from "../entities/OrganizationLicense";
 import Stripe from "stripe";
 import validateAdminToken from "../config/utils/adminToken";
+import { PlanCatalogService } from "../services/PlanCatalogService";
 
 export class SubscriptionController {
   static async createTrial(req: Request, res: Response): Promise<Response> {
@@ -38,7 +39,7 @@ export class SubscriptionController {
       return res.status(500).json({ error: "Erro ao criar licença trial" });
     }
   }
-
+yar
   static async createCheckoutSession(
     req: Request,
     res: Response
@@ -92,6 +93,17 @@ export class SubscriptionController {
     } catch (error) {
       console.error("Webhook error:", error);
       return res.status(400).json({ error: "Webhook error" });
+    }
+  }
+
+  static async getPlans(req: Request, res: Response): Promise<Response> {
+    try {
+      const catalog = await PlanCatalogService.getCatalog();
+
+      return res.json(catalog);
+    } catch (error) {
+      console.error("Erro ao listar planos:", error);
+      return res.status(500).json({ error: "Erro ao listar planos" });
     }
   }
 
