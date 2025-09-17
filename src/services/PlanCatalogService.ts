@@ -20,11 +20,11 @@ type CatalogEntry = {
   id: string;
   aliases?: string[];
   label: string;
-  headline: string;
   description?: string;
   type: CatalogEntryType;
   minimumSeats?: number;
   features: string[];
+  addonIds?: string[];
 };
 
 type BillingOption = {
@@ -41,8 +41,12 @@ type EnrichedEntry = CatalogEntry & {
   pricing: BillingOption[];
 };
 
+type PlanEnrichedEntry = EnrichedEntry & {
+  addons: EnrichedEntry[];
+};
+
 type PlanCatalog = {
-  plans: EnrichedEntry[];
+  plans: PlanEnrichedEntry[];
   addons: EnrichedEntry[];
 };
 
@@ -56,7 +60,19 @@ export class PlanCatalogService {
       planCatalogData.addons.map(async (entry) => this.enrichEntry(entry))
     );
 
-    return { plans, addons };
+    const addonMap = new Map<string, EnrichedEntry>();
+    addons.forEach((addon) => {
+      addonMap.set(addon.id, addon);
+    });
+
+    const plansWithAddons: PlanEnrichedEntry[] = plans.map((plan) => ({
+      ...plan,
+      addons: (plan.addonIds || [])
+        .map((addonId) => addonMap.get(addonId))
+        .filter((addon): addon is EnrichedEntry => Boolean(addon)),
+    }));
+
+    return { plans: plansWithAddons, addons };
   }
 
   private static async enrichEntry(

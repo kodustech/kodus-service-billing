@@ -3,7 +3,6 @@
     {
       "id": "free_byok",
       "label": "Community",
-      "headline": "Free",
       "description": "The power of AI-driven code reviews, fully self-hosted and open-source.",
       "type": "plan",
       "minimumSeats": 1,
@@ -23,7 +22,6 @@
       "id": "teams_byok",
       "aliases": ["teams_byok_annual"],
       "label": "Teams",
-      "headline": "$30/dev/month",
       "description": "The power of AI-driven code reviews, fully self-hosted and open-source.",
       "type": "plan",
       "minimumSeats": 5,
@@ -39,13 +37,13 @@
         "Priority queue for Kody Agents",
         "Kodus MCP (coming soon)",
         "Discord Community and Email Support"
-      ]
+      ],
+      "addonIds": ["teams_managed"]
     },
     {
-      "id": "enterprise_managed",
-      "aliases": ["enterprise_managed_annual", "enterprise_byok", "enterprise_byok_annual"],
+      "id": "enterprise_byok",
+      "aliases": ["enterprise_byok_annual"],
       "label": "Enterprise",
-      "headline": "Talk to Sales",
       "description": "The power of AI-driven code reviews, fully self-hosted and open-source.",
       "type": "contact",
       "features": [
@@ -62,7 +60,8 @@
         "RBAC + Audit logs and analytics",
         "Up to 5 hours month dedicated support with personalized onboarding",
         "Private Discord Channel and Email Support"
-      ]
+      ],
+      "addonIds": ["enterprise_managed"]
     }
   ],
   "addons": [
@@ -70,11 +69,22 @@
       "id": "teams_managed",
       "aliases": ["teams_managed_annual"],
       "label": "AI Compute Add-on",
-      "headline": "+20$/developer/month",
       "description": "Unlimited PRs for a flat monthly fee.",
       "type": "addon",
       "features": [
         "Unlimited PRs for a flat monthly fee"
+      ]
+    },
+    {
+      "id": "enterprise_managed",
+      "aliases": ["enterprise_managed_annual"],
+      "label": "Enterprise Managed",
+      "description": "Dedicated managed services to complement Enterprise BYOK.",
+      "type": "addon",
+      "features": [
+        "Dedicated success manager",
+        "Priority enterprise support",
+        "Customized onboarding and workflow integration"
       ]
     }
   ]
