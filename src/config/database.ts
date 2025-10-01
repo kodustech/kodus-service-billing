@@ -13,7 +13,7 @@ export const AppDataSource = new DataSource({
   username: process.env.PG_DB_USERNAME,
   password: process.env.PG_DB_PASSWORD,
   database: process.env.PG_DB_DATABASE,
-  schema: process.env.PG_DB_SCHEMA || "subscription",
+  schema: process.env.PG_DB_SCHEMA || "billing",
   synchronize: process.env.API_BILLING_NODE_ENV === "development",
   logging: process.env.API_BILLING_NODE_ENV === "development",
   ssl: !isDev
@@ -25,6 +25,7 @@ export const AppDataSource = new DataSource({
   migrations: [join(__dirname, '../migrations/*{.ts,.js}')],
   subscribers: [join(__dirname, './subscribers/*{.ts,.js}')],
 });
+
 
 export const initializeDatabase = async () => {
   const isDev = process.env.API_DATABASE_ENV === "development";
@@ -46,7 +47,7 @@ export const initializeDatabase = async () => {
   await tempDataSource.initialize();
 
   try {
-    const schema = process.env.PG_DB_SCHEMA || "subscription";
+    const schema = process.env.PG_DB_SCHEMA || "billing";
     await tempDataSource.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
     console.log(`Schema "${schema}" created or already exists`);
   } catch (error) {
