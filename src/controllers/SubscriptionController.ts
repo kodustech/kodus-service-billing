@@ -39,7 +39,7 @@ export class SubscriptionController {
       return res.status(500).json({ error: "Erro ao criar licença trial" });
     }
   }
-yar
+  
   static async createCheckoutSession(
     req: Request,
     res: Response
