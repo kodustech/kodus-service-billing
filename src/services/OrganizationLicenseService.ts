@@ -3,6 +3,7 @@ import { UserLicenseRepository } from "../repositories/UserLicenseRepository";
 import {
   OrganizationLicense,
   SubscriptionStatus,
+  PlanType,
 } from "../entities/OrganizationLicense";
 import { UserLicense, GitTool, LicenseStatus } from "../entities/UserLicense";
 import { In, LessThan } from "typeorm";
@@ -13,7 +14,8 @@ import axios from "axios";
 export class OrganizationLicenseService {
   static async createTrialLicense(
     organizationId: string,
-    teamId: string
+    teamId: string,
+    planType: PlanType = PlanType.TEAMS_MANAGED
   ): Promise<OrganizationLicense> {
     // Verifica se já existe uma licença para essa organização e time
     const existingLicense = await OrganizationLicenseRepository.findOne({
@@ -32,6 +34,7 @@ export class OrganizationLicenseService {
       organizationId,
       teamId,
       subscriptionStatus: SubscriptionStatus.TRIAL,
+      planType,
       trialEnd,
       totalLicenses: 0,
       assignedLicenses: 0,
@@ -319,6 +322,7 @@ export class OrganizationLicenseService {
   ): Promise<{
     valid: boolean;
     subscriptionStatus?: SubscriptionStatus;
+    planType?: PlanType;
     trialEnd?: Date;
     numberOfLicenses?: number;
   }> {
@@ -327,6 +331,16 @@ export class OrganizationLicenseService {
     });
 
     if (!license) return { valid: false };
+
+    // Plano gratuito é sempre válido
+    if (license.planType === PlanType.FREE_BYOK) {
+      return { 
+        valid: true, 
+        planType: license.planType,
+        subscriptionStatus: license.subscriptionStatus,
+        numberOfLicenses: license.totalLicenses,
+      };
+    }
 
     // Se estiver em trial, verificar se expirou
     if (license.subscriptionStatus === SubscriptionStatus.TRIAL) {
@@ -337,6 +351,7 @@ export class OrganizationLicenseService {
         return {
           valid: false,
           subscriptionStatus: SubscriptionStatus.EXPIRED,
+          planType: license.planType,
         };
       }
 
@@ -344,6 +359,7 @@ export class OrganizationLicenseService {
       return {
         valid: true,
         subscriptionStatus: SubscriptionStatus.TRIAL,
+        planType: license.planType,
         trialEnd: license.trialEnd,
       };
     }
@@ -354,6 +370,7 @@ export class OrganizationLicenseService {
         license.subscriptionStatus
       ),
       subscriptionStatus: license.subscriptionStatus,
+      planType: license.planType,
       numberOfLicenses: license.totalLicenses,
     };
   }
@@ -413,6 +430,35 @@ export class OrganizationLicenseService {
     }
 
     license.trialEnd = newTrialEnd;
+    await OrganizationLicenseRepository.save(license);
+
+    // Limpar cache para garantir que as consultas futuras obtenham dados atualizados
+    clearCacheByPrefix("org-license");
+    clearCacheByPrefix("user-license");
+    clearCacheByPrefix("users-license");
+
+    return license;
+  }
+
+  static async migrateToFreePlan(
+    organizationId: string,
+    teamId: string
+  ): Promise<OrganizationLicense> {
+    const license = await OrganizationLicenseRepository.findOne({
+      where: { organizationId, teamId },
+    });
+
+    if (!license) {
+      throw new Error("Licença não encontrada");
+    }
+
+    // Migrar para plano gratuito
+    license.planType = PlanType.FREE_BYOK;
+    license.subscriptionStatus = SubscriptionStatus.ACTIVE;
+    license.stripeCustomerId = null;
+    license.stripeSubscriptionId = null;
+    license.trialEnd = null;
+
     await OrganizationLicenseRepository.save(license);
 
     // Limpar cache para garantir que as consultas futuras obtenham dados atualizados

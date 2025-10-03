@@ -18,6 +18,13 @@ router.post("/webhook", async (req, res) => {
 });
 
 router.get(
+  "/plans",
+  async (req, res) => {
+    await SubscriptionController.getPlans(req, res);
+  }
+);
+
+router.get(
   "/validate-org-license",
   cacheMiddleware({ ttl: 15 * 60, keyPrefix: "org-license" }),
   async (req, res) => {
@@ -54,6 +61,10 @@ router.get(
 
 router.post("/update-trial", async (req, res) => {
   await SubscriptionController.updateTrial(req, res);
+});
+
+router.post("/migrate-to-free", async (req, res) => {
+  await SubscriptionController.migrateToFreePlan(req, res);
 });
 
 export default router;

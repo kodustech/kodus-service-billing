@@ -1,8 +1,10 @@
 import { Request, Response } from "express";
 import { OrganizationLicenseService } from "../services/OrganizationLicenseService";
 import { StripeService } from "../services/StripeService";
+import { PlanType } from "../entities/OrganizationLicense";
 import Stripe from "stripe";
 import validateAdminToken from "../config/utils/adminToken";
+import { PlanCatalogService } from "../services/PlanCatalogService";
 
 export class SubscriptionController {
   static async createTrial(req: Request, res: Response): Promise<Response> {
@@ -37,13 +39,13 @@ export class SubscriptionController {
       return res.status(500).json({ error: "Erro ao criar licença trial" });
     }
   }
-
+  
   static async createCheckoutSession(
     req: Request,
     res: Response
   ): Promise<Response> {
     try {
-      const { organizationId, quantity, teamId } = req.body;
+      const { organizationId, quantity, teamId, planType } = req.body;
 
       if (!organizationId || !quantity || !teamId) {
         return res.status(400).json({
@@ -54,7 +56,8 @@ export class SubscriptionController {
       const checkoutUrl = await StripeService.createCheckoutSession(
         organizationId,
         quantity,
-        teamId
+        teamId,
+        planType || PlanType.TEAMS_MANAGED_LEGACY
       );
 
       return res.json({ url: checkoutUrl });
@@ -90,6 +93,17 @@ export class SubscriptionController {
     } catch (error) {
       console.error("Webhook error:", error);
       return res.status(400).json({ error: "Webhook error" });
+    }
+  }
+
+  static async getPlans(req: Request, res: Response): Promise<Response> {
+    try {
+      const catalog = await PlanCatalogService.getCatalog();
+
+      return res.json(catalog);
+    } catch (error) {
+      console.error("Erro ao listar planos:", error);
+      return res.status(500).json({ error: "Erro ao listar planos" });
     }
   }
 
@@ -287,6 +301,30 @@ export class SubscriptionController {
       console.error("Erro ao atualizar trial:", error);
       return res.status(500).json({
         error: "Erro ao atualizar trial",
+      });
+    }
+  }
+
+  static async migrateToFreePlan(req: Request, res: Response): Promise<Response> {
+    try {
+      const { organizationId, teamId } = req.body;
+
+      if (!organizationId || !teamId) {
+        return res.status(400).json({
+          error: "ID da organização e teamId são obrigatórios",
+        });
+      }
+
+      const license = await OrganizationLicenseService.migrateToFreePlan(
+        organizationId,
+        teamId
+      );
+
+      return res.json({ success: true, license });
+    } catch (error) {
+      console.error("Erro ao migrar para plano gratuito:", error);
+      return res.status(500).json({
+        error: error instanceof Error ? error.message : "Erro ao migrar para plano gratuito",
       });
     }
   }

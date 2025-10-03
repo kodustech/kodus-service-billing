@@ -1,8 +1,9 @@
 import Stripe from "stripe";
 import "dotenv/config";
 import { OrganizationLicenseRepository } from "../repositories/OrganizationLicenseRepository";
-import { SubscriptionStatus } from "../entities/OrganizationLicense";
+import { SubscriptionStatus, PlanType } from "../entities/OrganizationLicense";
 import { clearCacheByPrefix } from "../config/utils/cache";
+import { getPlanTypeByPriceId, getPriceIdForPlan } from "../config/planPricing";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "");
 
@@ -11,7 +12,8 @@ export class StripeService {
   static async createCheckoutSession(
     organizationId: string,
     quantity: number,
-    teamId: string
+    teamId: string,
+    planType: PlanType = PlanType.TEAMS_MANAGED_LEGACY
   ): Promise<string> {
     // Buscar a licença da organização
     const license = await OrganizationLicenseRepository.findOne({
@@ -26,7 +28,7 @@ export class StripeService {
       payment_method_types: ["card"],
       line_items: [
         {
-          price: process.env.STRIPE_PRICE_ID,
+          price: getPriceIdForPlan(planType),
           quantity: quantity,
           adjustable_quantity: {
             enabled: true,
@@ -43,6 +45,7 @@ export class StripeService {
         organizationId: organizationId,
         teamId: teamId,
         licenseId: license.id,
+        planType: planType,
       },
     });
 
@@ -100,6 +103,10 @@ export class StripeService {
     const lineItems = await stripe.checkout.sessions.listLineItems(session.id);
     if (lineItems.data.length > 0) {
       license.totalLicenses = lineItems.data[0].quantity || 0;
+      
+      // Identificar plano pelo Price ID
+      const priceId = lineItems.data[0]?.price?.id;
+      license.planType = getPlanTypeByPriceId(priceId);
     }
 
     await OrganizationLicenseRepository.save(license);

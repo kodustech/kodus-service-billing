@@ -1,0 +1,70 @@
+{
+  "plans": [
+    {
+      "id": "free_byok",
+      "label": "Community",
+      "description": "For indie devs, OSS maintainers, and small teams.",
+      "type": "plan",
+      "minimumSeats": 1,
+      "features": [
+        "Bring your own key",
+        "Self Hosted or Hosted by Kodus",
+        "Unlimited users",
+        "Unlimited issues on Quality Radar",
+        "Use up to 10 Kody Rules",
+        "Use up to 3 active plugins",
+        "Kody Learnings and Memory",
+        "Discord Community Support"
+      ]
+    },
+    {
+      "id": "teams_byok",
+      "aliases": ["teams_byok_annual"],
+      "label": "Teams",
+      "description": "For product engineering teams (5–50 devs) that need noise-controlled reviews, governance, and metrics.",
+      "type": "plan",
+      "minimumSeats": 5,
+      "features": [
+        "Everything in Community +",
+        "Use unlimited Kody Rules",
+        "Use unlimited active plugins",
+        "Priority queue for Kody Agents",
+        "Engineering Metrics / Cockpit",
+        "Discord Community and Email Support"
+      ],
+      "addonIds": ["teams_managed"]
+    },
+    {
+      "id": "enterprise_byok",
+      "aliases": ["enterprise_byok_annual"],
+      "label": "Enterprise",
+      "description": "For large or regulated orgs that require hardened security, auditability, and hands-on onboarding—in.",
+      "type": "contact",
+      "features": [
+        "Everything in Teams +",
+        "RBAC + Audit logs and analytics",
+        "Up to 5 hours month dedicated support with personalized onboarding",
+        "Private Discord Channel and Email Support"
+      ],
+      "addonIds": ["enterprise_managed"]
+    }
+  ],
+  "addons": [
+    {
+      "id": "teams_managed",
+      "aliases": ["teams_managed_annual"],
+      "label": "AI Compute Add-on",
+      "description": "Unlimited PRs for a flat monthly fee.",
+      "type": "addon",
+      "features": ["Unlimited PRs for a flat monthly fee"]
+    },
+    {
+      "id": "enterprise_managed",
+      "aliases": ["enterprise_managed_annual"],
+      "label": "Enterprise Managed",
+      "description": "Dedicated managed services to complement Enterprise BYOK.",
+      "type": "addon",
+      "features": ["Unlimited PRs for a flat monthly fee"]
+    }
+  ]
+}
