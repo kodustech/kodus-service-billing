@@ -484,7 +484,6 @@ export class OrganizationLicenseService {
     license.subscriptionStatus = SubscriptionStatus.ACTIVE;
     license.stripeCustomerId = null;
     license.stripeSubscriptionId = null;
-    license.trialEnd = null;
 
     await OrganizationLicenseRepository.save(license);
 
