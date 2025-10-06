@@ -419,6 +419,30 @@ export class OrganizationLicenseService {
     return expiredTrials.length;
   }
 
+  static async migrateExpiredTrialsToFree(): Promise<number> {
+    const now = new Date();
+    const expiredTrials = await OrganizationLicenseRepository.find({
+      where: {
+        subscriptionStatus: SubscriptionStatus.TRIAL,
+        trialEnd: LessThan(now)
+      }
+    });
+
+    let migratedCount = 0;
+
+    for (const trial of expiredTrials) {
+      try {
+        await this.migrateToFreePlan(trial.organizationId, trial.teamId);
+        migratedCount++;
+        console.log(`Trial migrado para plano gratuito: orgId=${trial.organizationId}, teamId=${trial.teamId}`);
+      } catch (error) {
+        console.error(`Erro ao migrar trial para plano gratuito: orgId=${trial.organizationId}, teamId=${trial.teamId}`, error);
+      }
+    }
+
+    return migratedCount;
+  }
+
 
   static async updateTrial(orgId: string, teamId: string, newTrialEnd: Date){
     const license = await OrganizationLicenseRepository.findOne({
