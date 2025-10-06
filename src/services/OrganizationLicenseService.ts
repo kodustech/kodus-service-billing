@@ -484,6 +484,7 @@ export class OrganizationLicenseService {
     license.subscriptionStatus = SubscriptionStatus.ACTIVE;
     license.stripeCustomerId = null;
     license.stripeSubscriptionId = null;
+    license.totalLicenses = 50;
 
     await OrganizationLicenseRepository.save(license);
 
