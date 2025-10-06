@@ -84,10 +84,11 @@ export class OrganizationLicenseService {
     // Se estiver em trial, verificar se não expirou
     if (orgLicense.subscriptionStatus === SubscriptionStatus.TRIAL) {
       const now = new Date();
-      if (now > orgLicense.trialEnd) {
-        orgLicense.subscriptionStatus = SubscriptionStatus.EXPIRED;
-        await OrganizationLicenseRepository.save(orgLicense);
-        throw new Error("A licença trial desta organização expirou");
+      if (orgLicense.trialEnd && now > orgLicense.trialEnd) {
+        await this.migrateToFreePlan(organizationId, teamId);
+        throw new Error(
+          "A licença trial desta organização expirou e ela foi migrada para o plano gratuito"
+        );
       }
     }
 
@@ -345,13 +346,16 @@ export class OrganizationLicenseService {
     // Se estiver em trial, verificar se expirou
     if (license.subscriptionStatus === SubscriptionStatus.TRIAL) {
       const now = new Date();
-      if (now > license.trialEnd) {
-        license.subscriptionStatus = SubscriptionStatus.EXPIRED;
-        await OrganizationLicenseRepository.save(license);
+      if (license.trialEnd && now > license.trialEnd) {
+        const migratedLicense = await this.migrateToFreePlan(
+          license.organizationId,
+          license.teamId
+        );
         return {
-          valid: false,
-          subscriptionStatus: SubscriptionStatus.EXPIRED,
-          planType: license.planType,
+          valid: true,
+          subscriptionStatus: migratedLicense.subscriptionStatus,
+          planType: migratedLicense.planType,
+          numberOfLicenses: migratedLicense.totalLicenses,
         };
       }
 
@@ -407,15 +411,14 @@ export class OrganizationLicenseService {
     const expiredTrials = await OrganizationLicenseRepository.find({
       where: {
         subscriptionStatus: SubscriptionStatus.TRIAL,
-        trialEnd: LessThan(now)
-      }
+        trialEnd: LessThan(now),
+      },
     });
 
     for (const trial of expiredTrials) {
-      trial.subscriptionStatus = SubscriptionStatus.EXPIRED;
+      await this.migrateToFreePlan(trial.organizationId, trial.teamId);
     }
 
-    await OrganizationLicenseRepository.save(expiredTrials);
     return expiredTrials.length;
   }
 
