@@ -26,6 +26,8 @@
       "minimumSeats": 5,
       "features": [
         "Everything in Community +",
+        "Hosted by Kodus",
+        "Unlimited users",
         "Use unlimited Kody Rules",
         "Use unlimited active plugins",
         "Priority queue for Kody Agents",
@@ -42,6 +44,8 @@
       "type": "contact",
       "features": [
         "Everything in Teams +",
+        "Self Hosted or Hosted by Kodus",
+        "Unlimited users",
         "RBAC + Audit logs and analytics",
         "Up to 5 hours month dedicated support with personalized onboarding",
         "Private Discord Channel and Email Support"
@@ -53,10 +57,12 @@
     {
       "id": "teams_managed",
       "aliases": ["teams_managed_annual"],
-      "label": "AI Compute Add-on",
+      "label": "AI Tokens Add-on",
       "description": "Unlimited PRs for a flat monthly fee.",
       "type": "addon",
-      "features": ["Unlimited PRs for a flat monthly fee"]
+      "features": [
+        "Replace your API key setup with unlimited PRs on our AI servers — flat rate, no limits."
+      ]
     },
     {
       "id": "enterprise_managed",
