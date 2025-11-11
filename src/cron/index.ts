@@ -11,5 +11,3 @@ cron.schedule("0 */2 * * *", async () => {
     console.error("Erro ao migrar trials expirados para plano gratuito:", error);
   }
 });
-
-// Não precisa exportar nada, apenas executar o schedule
