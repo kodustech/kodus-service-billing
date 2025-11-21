@@ -11,7 +11,6 @@ const planTypeValues = new Set<string>(Object.values(PlanType));
 
 const planCatalogData = catalog as {
   plans: CatalogEntry[];
-  addons: CatalogEntry[];
 };
 
 type CatalogEntryType = "plan" | "addon" | "contact";
@@ -52,23 +51,30 @@ type PlanCatalog = {
 
 export class PlanCatalogService {
   static async getCatalog(): Promise<PlanCatalog> {
-    const plans = await Promise.all(
+    const enrichedPlans = await Promise.all(
       planCatalogData.plans.map(async (entry) => this.enrichEntry(entry))
     );
 
-    const addons = await Promise.all(
-      planCatalogData.addons.map(async (entry) => this.enrichEntry(entry))
-    );
-
-    const addonMap = new Map<string, EnrichedEntry>();
-    addons.forEach((addon) => {
-      addonMap.set(addon.id, addon);
+    const planMap = new Map<string, EnrichedEntry>();
+    enrichedPlans.forEach((plan) => {
+      planMap.set(plan.id, plan);
     });
 
-    const plansWithAddons: PlanEnrichedEntry[] = plans.map((plan) => ({
+    const addonsSet = new Set<string>();
+    planCatalogData.plans.forEach((plan) => {
+      if (plan.addonIds) {
+        plan.addonIds.forEach((addonId) => addonsSet.add(addonId));
+      }
+    });
+
+    const addons = Array.from(addonsSet)
+      .map((addonId) => planMap.get(addonId))
+      .filter((addon): addon is EnrichedEntry => Boolean(addon));
+
+    const plansWithAddons: PlanEnrichedEntry[] = enrichedPlans.map((plan) => ({
       ...plan,
       addons: (plan.addonIds || [])
-        .map((addonId) => addonMap.get(addonId))
+        .map((addonId) => planMap.get(addonId))
         .filter((addon): addon is EnrichedEntry => Boolean(addon)),
     }));
 
