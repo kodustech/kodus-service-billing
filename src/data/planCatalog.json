@@ -37,7 +37,7 @@
     },
     {
       "id": "teams_managed",
-      "aliases": ["teams_byok_annual"],
+      "aliases": ["teams_managed_annual"],
       "label": "Teams + AI Tokens",
       "description": "For product engineering teams (5–50 devs) that need noise-controlled reviews, governance, and metrics. And want to use our AI Tokens API key.",
       "type": "plan",
