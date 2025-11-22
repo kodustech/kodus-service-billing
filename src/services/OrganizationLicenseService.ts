@@ -359,6 +359,7 @@ export class OrganizationLicenseService {
         planType?: PlanType;
         trialEnd?: Date;
         numberOfLicenses?: number;
+        stripeCustomerId?: string;
     }> {
         const license = await OrganizationLicenseRepository.findOne({
             where: { organizationId, teamId },
@@ -373,6 +374,7 @@ export class OrganizationLicenseService {
                 planType: license.planType,
                 subscriptionStatus: license.subscriptionStatus,
                 numberOfLicenses: license.totalLicenses,
+                stripeCustomerId: license?.stripeCustomerId,
             };
         }
 
@@ -389,6 +391,7 @@ export class OrganizationLicenseService {
                     subscriptionStatus: migratedLicense.subscriptionStatus,
                     planType: migratedLicense.planType,
                     numberOfLicenses: migratedLicense.totalLicenses,
+                    stripeCustomerId: migratedLicense?.stripeCustomerId,
                 };
             }
 
@@ -398,6 +401,7 @@ export class OrganizationLicenseService {
                 subscriptionStatus: SubscriptionStatus.TRIAL,
                 planType: license.planType,
                 trialEnd: license.trialEnd,
+                stripeCustomerId: license?.stripeCustomerId,
             };
         }
 
@@ -410,6 +414,7 @@ export class OrganizationLicenseService {
             subscriptionStatus: license.subscriptionStatus,
             planType: license.planType,
             numberOfLicenses: license.totalLicenses,
+            stripeCustomerId: license?.stripeCustomerId,
         };
     }
 
