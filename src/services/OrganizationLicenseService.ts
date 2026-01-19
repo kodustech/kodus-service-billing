@@ -41,12 +41,12 @@ export class OrganizationLicenseService {
     });
 
     const savedLicense = await OrganizationLicenseRepository.save(license);
-    
+
     // Limpar cache para garantir que as consultas futuras obtenham dados atualizados
     clearCacheByPrefix("org-license");
     clearCacheByPrefix("user-license");
     clearCacheByPrefix("users-license");
-    
+
     return savedLicense;
   }
 
@@ -271,7 +271,7 @@ export class OrganizationLicenseService {
           headers: {
             "Content-Type": "application/json",
           },
-          timeout: 3000, 
+          timeout: 3000,
         });
       }
     } catch (error) {
@@ -331,12 +331,14 @@ export class OrganizationLicenseService {
       where: { organizationId, teamId },
     });
 
-    if (!license) return { valid: false };
+    if (!license) {
+      return { valid: false };
+    }
 
     // Plano gratuito é sempre válido
     if (license.planType === PlanType.FREE_BYOK) {
-      return { 
-        valid: true, 
+      return {
+        valid: true,
         planType: license.planType,
         subscriptionStatus: license.subscriptionStatus,
         numberOfLicenses: license.totalLicenses,
@@ -447,7 +449,7 @@ export class OrganizationLicenseService {
   }
 
 
-  static async updateTrial(orgId: string, teamId: string, newTrialEnd: Date){
+  static async updateTrial(orgId: string, teamId: string, newTrialEnd: Date) {
     const license = await OrganizationLicenseRepository.findOne({
       where: { organizationId: orgId, teamId },
     });

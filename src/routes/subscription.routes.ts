@@ -17,19 +17,24 @@ router.post("/webhook", async (req, res) => {
   await SubscriptionController.handleWebhook(req, res);
 });
 
-router.get(
-  "/plans",
-  async (req, res) => {
-    await SubscriptionController.getPlans(req, res);
-  }
-);
+router.get("/plans", async (req, res) => {
+  await SubscriptionController.getPlans(req, res);
+});
 
 router.get(
   "/validate-org-license",
   cacheMiddleware({ ttl: 15 * 60, keyPrefix: "org-license" }),
   async (req, res) => {
+    // Intercepta o res.json para logar o resultado antes de enviar
+    const originalJson = res.json;
+    res.json = function (data) {
+      console.log(
+        `[License Check] Params: ${JSON.stringify(req.query)} | Result: ${JSON.stringify(data)}`,
+      );
+      return originalJson.call(this, data);
+    };
     await SubscriptionController.validateLicense(req, res);
-  }
+  },
 );
 
 router.post("/assign-license", async (req, res) => {
@@ -41,7 +46,7 @@ router.get(
   cacheMiddleware({ ttl: 15 * 60, keyPrefix: "user-license" }),
   async (req, res) => {
     await SubscriptionController.checkUserLicense(req, res);
-  }
+  },
 );
 
 router.get(
@@ -49,15 +54,12 @@ router.get(
   cacheMiddleware({ ttl: 15 * 60, keyPrefix: "users-license" }),
   async (req, res) => {
     await SubscriptionController.getAllUsersWithLicense(req, res);
-  }
+  },
 );
 
-router.get(
-  "/portal/:organizationId/:teamId",
-  async (req, res) => {
-    await SubscriptionController.getCustomerPortalUrl(req, res);
-  }
-);
+router.get("/portal/:organizationId/:teamId", async (req, res) => {
+  await SubscriptionController.getCustomerPortalUrl(req, res);
+});
 
 router.post("/update-trial", async (req, res) => {
   await SubscriptionController.updateTrial(req, res);
