@@ -2,6 +2,9 @@ FROM node:lts-alpine3.18 AS production
 
 WORKDIR /app
 
+# Configurar PM2 para usar pasta local dentro do volume de logs
+ENV PM2_HOME=/app/logs/.pm2
+
 # Instalação de Dependências
 COPY package.json yarn.lock ./
 
@@ -17,12 +20,18 @@ RUN yarn global add pm2
 # Instalação do pm2-logrotate
 RUN pm2 install pm2-logrotate
 
-# Define configurações do pm2-logrotate
-RUN pm2 set pm2-logrotate:max_size 30M
-RUN pm2 set pm2-logrotate:retain 10
+# Define configurações do pm2-logrotate para usar o diretório /app/logs
+RUN pm2 set pm2-logrotate:max_size 30M && \
+    pm2 set pm2-logrotate:retain 10 && \
+    pm2 set pm2-logrotate:workerInterval 30 && \
+    pm2 set pm2-logrotate:rotateInterval "0 0 * * *" && \
+    pm2 set pm2-logrotate:compress true
+
+# Criar diretório de logs e ajustar permissões (755 é seguro e suficiente para root)
+RUN mkdir -p /app/logs /app/logs/.pm2 && chmod -R 755 /app/logs
 
 # Expondo a porta
 EXPOSE ${PORT}
 
-# Comando de inicialização usando PM2
+# Comando de inicialização usando ecosystem.config.js diretamente
 CMD ["pm2-runtime", "start", "ecosystem.config.js", "--env", "production"] 

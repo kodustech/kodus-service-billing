@@ -6,6 +6,7 @@ import cors from "cors";
 import { initializeDatabase } from "./config/database";
 import subscriptionRoutes from "./routes/subscription.routes";
 import corsOptions from "./config/utils/cors";
+import { setupLifecycleHandlers } from "./config/utils/lifecycle";
 import "dotenv/config";
 
 const app: Express = express();
@@ -42,6 +43,8 @@ app.use(bodyParser.json({ limit: "10mb" }));
 
 app.use("/api/billing", subscriptionRoutes);
 
-app.listen(port, () => {
+const server = app.listen(port, () => {
   console.log(`billing service listening to port ${port}`);
 });
+
+setupLifecycleHandlers(server);
