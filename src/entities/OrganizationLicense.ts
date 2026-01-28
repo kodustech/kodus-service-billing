@@ -4,6 +4,7 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
+  Index,
 } from "typeorm";
 
 export enum SubscriptionStatus {
@@ -28,6 +29,12 @@ export enum PlanType {
 }
 
 @Entity("organization_licenses")
+@Index("IDX_org_licenses_orgid_teamid", ["organizationId", "teamId"])
+@Index("IDX_org_licenses_organizationid", ["organizationId"])
+@Index("IDX_org_licenses_subscription_status", ["subscriptionStatus"])
+@Index("IDX_org_licenses_status_trialend", ["subscriptionStatus", "trialEnd"])
+@Index("IDX_org_licenses_stripe_customer_id", ["stripeCustomerId"])
+@Index("IDX_org_licenses_stripe_subscription_id", ["stripeSubscriptionId"])
 export class OrganizationLicense {
   @PrimaryGeneratedColumn("uuid")
   id: string;
