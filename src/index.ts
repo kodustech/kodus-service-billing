@@ -3,7 +3,7 @@ import express, { Express } from "express";
 import bodyParser from "body-parser";
 import helmet from "helmet";
 import cors from "cors";
-import { initializeDatabase } from "./config/database";
+import { initializeDatabase, AppDataSource } from "./config/database";
 import subscriptionRoutes from "./routes/subscription.routes";
 import corsOptions from "./config/utils/cors";
 import { setupLifecycleHandlers } from "./config/utils/lifecycle";
@@ -42,6 +42,31 @@ app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json({ limit: "10mb" }));
 
 app.use("/api/billing", subscriptionRoutes);
+
+app.get("/health", (req, res) => {
+  res.json({
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+  });
+});
+
+app.get("/health/ready", async (req, res) => {
+  const isDatabaseReady = AppDataSource.isInitialized;
+  const isStripeConfigured = !!process.env.STRIPE_SECRET_KEY;
+
+  const ready = isDatabaseReady && isStripeConfigured;
+
+  const statusCode = ready ? 200 : 503;
+  res.status(statusCode).json({
+    status: ready ? "ready" : "not ready",
+    timestamp: new Date().toISOString(),
+    dependencies: {
+      database: isDatabaseReady ? "connected" : "disconnected",
+      stripe: isStripeConfigured ? "configured" : "not configured",
+    },
+  });
+});
 
 const server = app.listen(port, () => {
   console.log(`billing service listening to port ${port}`);
