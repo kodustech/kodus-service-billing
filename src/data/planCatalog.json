@@ -7,66 +7,43 @@
       "type": "plan",
       "minimumSeats": 1,
       "features": [
-        "Self Hosted or Hosted by Kodus",
         "Unlimited PRs using your own API key",
         "Unlimited users",
-        "Unlimited issues on Quality Radar",
         "Use up to 10 Kody Rules",
         "Use up to 3 active plugins",
+        "Unlimited issues on Quality Radar",
         "Kody Learnings and Memory",
         "Discord Community Support"
       ]
     },
     {
       "id": "teams_byok",
-      "aliases": ["teams_byok_annual"],
-      "label": "Teams BYOK",
-      "description": "For product engineering teams (5–50 devs) that need noise-controlled reviews, governance, and metrics. And want to bring your own API key.",
+      "aliases": [
+        "teams_byok_annual"
+      ],
+      "label": "Teams",
+      "description": "For product engineering teams that need noise-controlled reviews, governance, and metrics.",
       "type": "plan",
       "minimumSeats": 5,
       "features": [
-        "Hosted by Kodus",
-        "Unlimited PRs using your own API key",
-        "Unlimited users",
         "Use unlimited Kody Rules",
         "Use unlimited active plugins",
-        "Priority queue for Kody Agents",
-        "Engineering Metrics / Cockpit",
-        "Discord Community and Email Support"
-      ]
-    },
-    {
-      "id": "teams_managed",
-      "aliases": ["teams_managed_annual"],
-      "label": "Teams + AI Tokens",
-      "description": "For product engineering teams (5–50 devs) that need noise-controlled reviews, governance, and metrics. And want to use our AI Tokens API key.",
-      "type": "plan",
-      "minimumSeats": 5,
-      "features": [
-        "Hosted by Kodus",
-        "Unlimited PRs using our AI Tokens API key",
-        "Unlimited users",
-        "Use unlimited Kody Rules",
-        "Use unlimited active plugins",
-        "Priority queue for Kody Agents",
+        "Priority queue for Code Reviews",
         "Engineering Metrics / Cockpit",
         "Discord Community and Email Support"
       ]
     },
     {
       "id": "enterprise_byok",
-      "aliases": ["enterprise_byok_annual"],
+      "aliases": [
+        "enterprise_byok_annual"
+      ],
       "label": "Enterprise",
       "description": "For large or regulated orgs that require hardened security, auditability, and hands-on onboarding—in.",
       "type": "contact",
       "features": [
-        "Hosted by Kodus",
-        "Unlimited PRs using our AI Tokens API key",
-        "Unlimited users",
-        "Use unlimited Kody Rules",
-        "Use unlimited active plugins",
-        "Priority queue for Kody Agents",
-        "Engineering Metrics / Cockpit",
+        "SSO / SAML",
+        "SOC 2 in progress",
         "RBAC + Audit logs and analytics",
         "Up to 5 hours month dedicated support with personalized onboarding",
         "Private Discord Channel and Email Support"
