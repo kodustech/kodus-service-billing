@@ -2,9 +2,74 @@ import fs from "fs";
 import path from "path";
 import axios from "axios";
 import { buildOpenApiSpec } from "../../src/config/docs/openapi";
-import { getDocsEnv } from "../../src/config/docs/env";
+import { getDocsEnv, DocsEnv } from "../../src/config/docs/env";
 
-async function exportSpec() {
+const DEFAULT_EXPORT_HOSTS = ["localhost", "127.0.0.1", "::1"];
+
+function normalizeHost(entry: string): string | null {
+  const trimmed = entry.trim();
+  if (!trimmed) return null;
+
+  if (trimmed.includes("://")) {
+    try {
+      return new URL(trimmed).hostname;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  return trimmed;
+}
+
+export function resolveAllowedHosts(env: DocsEnv): Set<string> {
+  const rawAllowlist = process.env.API_DOCS_EXPORT_ALLOWLIST || "";
+  const explicitAllowlist = rawAllowlist
+    .split(",")
+    .map((entry) => normalizeHost(entry))
+    .filter((entry): entry is string => Boolean(entry));
+
+  if (explicitAllowlist.length > 0) {
+    return new Set(explicitAllowlist);
+  }
+
+  const hosts = new Set<string>();
+
+  if (env.baseUrl) {
+    const baseHost = normalizeHost(env.baseUrl);
+    if (baseHost) hosts.add(baseHost);
+  }
+
+  if (env.serverUrls) {
+    const serverHosts = env.serverUrls
+      .split(",")
+      .map((entry) => entry.split("|")[0])
+      .map((entry) => normalizeHost(entry))
+      .filter((entry): entry is string => Boolean(entry));
+    serverHosts.forEach((host) => hosts.add(host));
+  }
+
+  DEFAULT_EXPORT_HOSTS.forEach((host) => hosts.add(host));
+
+  return hosts;
+}
+
+export function isHostAllowed(host: string, allowlist: Set<string>): boolean {
+  return allowlist.has(host);
+}
+
+function assertAllowedUrl(url: URL, allowlist: Set<string>) {
+  if (!["http:", "https:"].includes(url.protocol)) {
+    throw new Error(`URL protocol not allowed: ${url.protocol}`);
+  }
+
+  if (!isHostAllowed(url.hostname, allowlist)) {
+    throw new Error(
+      `Host not allowed: ${url.hostname}. Allowed: ${Array.from(allowlist).join(", ")}`
+    );
+  }
+}
+
+export async function exportSpec() {
   const env = getDocsEnv();
   const outputDir = path.join(process.cwd(), ".openapi");
   const outputFile = path.join(outputDir, "openapi.json");
@@ -12,8 +77,10 @@ async function exportSpec() {
   let spec: unknown;
 
   if (env.baseUrl) {
-    const url = new URL(env.specPath, env.baseUrl).toString();
-    const response = await axios.get(url, { timeout: 10000 });
+    const url = new URL(env.specPath, env.baseUrl);
+    const allowedHosts = resolveAllowedHosts(env);
+    assertAllowedUrl(url, allowedHosts);
+    const response = await axios.get(url.toString(), { timeout: 10000 });
     spec = response.data;
   } else {
     spec = buildOpenApiSpec();
@@ -25,7 +92,9 @@ async function exportSpec() {
   console.log(`OpenAPI spec written to ${outputFile}`);
 }
 
-exportSpec().catch((error) => {
-  console.error("Failed to export OpenAPI spec:", error);
-  process.exit(1);
-});
+if (require.main === module) {
+  exportSpec().catch((error) => {
+    console.error("Failed to export OpenAPI spec:", error);
+    process.exit(1);
+  });
+}
