@@ -45,15 +45,7 @@ export function buildOpenApiSpec() {
       { name: "Billing", description: "Subscription and license endpoints" },
       { name: "Health", description: "Service health endpoints" },
     ],
-    security: [{ BearerAuth: [] }],
     components: {
-      securitySchemes: {
-        BearerAuth: {
-          type: "http",
-          scheme: "bearer",
-          bearerFormat: "JWT",
-        },
-      },
       schemas: {
         ApiErrorDto: {
           type: "object",

@@ -123,6 +123,13 @@ router.post("/create-checkout-session", async (req, res) => {
  *     description: Receives Stripe webhook events.
  *     operationId: handleWebhook
  *     security: []
+ *     parameters:
+ *       - in: header
+ *         name: stripe-signature
+ *         required: true
+ *         schema:
+ *           type: string
+ *         example: t=1710000000,v1=signature
  *     requestBody:
  *       required: true
  *       content:
