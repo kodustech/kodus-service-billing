@@ -45,6 +45,7 @@ export function buildOpenApiSpec() {
       { name: "Billing", description: "Subscription and license endpoints" },
       { name: "Health", description: "Service health endpoints" },
     ],
+    security: [],
     components: {
       schemas: {
         ApiErrorDto: {
