@@ -22,22 +22,7 @@ function normalizeHost(entry: string): string | null {
 }
 
 export function resolveAllowedHosts(env: DocsEnv): Set<string> {
-  const rawAllowlist = process.env.API_DOCS_EXPORT_ALLOWLIST || "";
-  const explicitAllowlist = rawAllowlist
-    .split(",")
-    .map((entry) => normalizeHost(entry))
-    .filter((entry): entry is string => Boolean(entry));
-
-  if (explicitAllowlist.length > 0) {
-    return new Set(explicitAllowlist);
-  }
-
   const hosts = new Set<string>();
-
-  if (env.baseUrl) {
-    const baseHost = normalizeHost(env.baseUrl);
-    if (baseHost) hosts.add(baseHost);
-  }
 
   if (env.serverUrls) {
     const serverHosts = env.serverUrls
