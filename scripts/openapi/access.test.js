@@ -59,8 +59,8 @@ process.env.API_DOCS_BASIC_PASS = "devpass";
   guard(req, res, () => {
     nextCalled = true;
   });
-  assert.equal(res.statusCode, 403);
-  assert.equal(nextCalled, false);
+  assert.equal(res.statusCode, 200);
+  assert.equal(nextCalled, true);
 }
 
 process.env.API_DOCS_IP_ALLOWLIST = "10.0.0.0/8";
@@ -75,8 +75,8 @@ process.env.API_DOCS_BASIC_PASS = "devpass";
   guard(req, res, () => {
     nextCalled = true;
   });
-  assert.equal(res.statusCode, 403);
-  assert.equal(nextCalled, false);
+  assert.equal(res.statusCode, 200);
+  assert.equal(nextCalled, true);
 }
 
 {

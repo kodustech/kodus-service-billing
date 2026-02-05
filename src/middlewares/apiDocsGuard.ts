@@ -1,20 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { getDocsEnv } from "../config/docs/env";
-import {
-  isIpAllowed,
-  parseAllowlist,
-  parseBasicAuth,
-} from "../config/docs/access";
-
-function getRequestIp(req: Request): string {
-  if (req.ip) return req.ip;
-  if (req.socket?.remoteAddress) return req.socket.remoteAddress;
-  const legacyConnection = (
-    req as Request & { connection?: { remoteAddress?: string } }
-  ).connection;
-  if (legacyConnection?.remoteAddress) return legacyConnection.remoteAddress;
-  return "";
-}
+import { parseBasicAuth } from "../config/docs/access";
 
 function getAuthHeader(req: Request): string | undefined {
   const value = req.headers.authorization;
@@ -23,22 +9,10 @@ function getAuthHeader(req: Request): string | undefined {
 }
 
 export function buildDocsGuard() {
-  const { allowlist, basicUser, basicPass } = getDocsEnv();
-  const parsedAllowlist = parseAllowlist(allowlist);
+  const { basicUser, basicPass } = getDocsEnv();
 
   return (req: Request, res: Response, next: NextFunction) => {
-    if (!parsedAllowlist.length) {
-      res.status(403).json({ error: "Forbidden" });
-      return;
-    }
-
     if (!basicUser || !basicPass) {
-      res.status(403).json({ error: "Forbidden" });
-      return;
-    }
-
-    const requestIp = getRequestIp(req);
-    if (!requestIp || !isIpAllowed(requestIp, parsedAllowlist)) {
       res.status(403).json({ error: "Forbidden" });
       return;
     }
