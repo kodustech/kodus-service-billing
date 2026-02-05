@@ -12,6 +12,7 @@ const router = Router();
  *     tags: [Billing]
  *     summary: Create trial license
  *     description: Creates a trial license for an organization and team.
+ *     operationId: createTrial
  *     requestBody:
  *       required: true
  *       content:
@@ -65,6 +66,7 @@ router.post("/trial", async (req, res) => {
  *     tags: [Billing]
  *     summary: Create checkout session
  *     description: Creates a Stripe checkout session for subscriptions.
+ *     operationId: createCheckoutSession
  *     requestBody:
  *       required: true
  *       content:
@@ -119,6 +121,7 @@ router.post("/create-checkout-session", async (req, res) => {
  *     tags: [Billing]
  *     summary: Handle Stripe webhook
  *     description: Receives Stripe webhook events.
+ *     operationId: handleWebhook
  *     security: []
  *     requestBody:
  *       required: true
@@ -175,6 +178,7 @@ router.post("/webhook", async (req, res) => {
  *     tags: [Billing]
  *     summary: List plans
  *     description: Returns the current plan catalog with pricing.
+ *     operationId: listPlans
  *     responses:
  *       "200":
  *         description: Plan catalog response.
@@ -218,6 +222,7 @@ router.get("/plans", async (req, res) => {
  *     tags: [Billing]
  *     summary: Validate organization license
  *     description: Validates the license for an organization and team.
+ *     operationId: validateOrgLicense
  *     parameters:
  *       - in: query
  *         name: organizationId
@@ -286,6 +291,7 @@ router.get(
  *     tags: [Billing]
  *     summary: Assign licenses to users
  *     description: Assigns or updates license status for users in a team.
+ *     operationId: assignLicense
  *     requestBody:
  *       required: true
  *       content:
@@ -342,6 +348,7 @@ router.post("/assign-license", async (req, res) => {
  *     tags: [Billing]
  *     summary: Check user license
  *     description: Checks if a user has an active license.
+ *     operationId: checkUserLicense
  *     parameters:
  *       - in: query
  *         name: organizationId
@@ -408,6 +415,7 @@ router.get(
  *     tags: [Billing]
  *     summary: List users with licenses
  *     description: Returns users with active licenses for an organization.
+ *     operationId: listUsersWithLicense
  *     parameters:
  *       - in: query
  *         name: organizationId
@@ -470,6 +478,7 @@ router.get(
  *     tags: [Billing]
  *     summary: Get customer portal URL
  *     description: Returns Stripe customer portal URL for an organization.
+ *     operationId: getCustomerPortalUrl
  *     parameters:
  *       - in: path
  *         name: organizationId
@@ -526,6 +535,7 @@ router.get("/portal/:organizationId/:teamId", async (req, res) => {
  *     tags: [Billing]
  *     summary: Update trial end date
  *     description: Updates the trial end date for an organization.
+ *     operationId: updateTrial
  *     requestBody:
  *       required: true
  *       content:
@@ -580,6 +590,7 @@ router.post("/update-trial", async (req, res) => {
  *     tags: [Billing]
  *     summary: Migrate to free plan
  *     description: Migrates an organization to the free plan.
+ *     operationId: migrateToFreePlan
  *     requestBody:
  *       required: true
  *       content:

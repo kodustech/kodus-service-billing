@@ -53,6 +53,7 @@ app.use("/api/billing", subscriptionRoutes);
  *     tags: [Health]
  *     summary: Liveness probe
  *     description: Returns basic service status and uptime.
+ *     operationId: healthCheck
  *     security: []
  *     responses:
  *       "200":
@@ -101,6 +102,7 @@ app.get("/health", (req, res) => {
  *     tags: [Health]
  *     summary: Readiness probe
  *     description: Checks database and Stripe readiness.
+ *     operationId: readinessCheck
  *     security: []
  *     responses:
  *       "200":

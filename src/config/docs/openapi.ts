@@ -16,21 +16,31 @@ function parseServerUrls(raw: string): ServerEntry[] {
       if (!url) return null;
       return description ? { url, description } : { url };
     })
-    .filter((entry): entry is ServerEntry => Boolean(entry));
+    .filter(Boolean) as ServerEntry[];
 }
 
 export function buildOpenApiSpec() {
   const env = getDocsEnv();
+
+  const servers = parseServerUrls(env.serverUrls);
+  if (servers.length === 0) {
+    const fallbackUrl = env.baseUrl || "https://qa.api.kodus.io";
+    servers.push({ url: fallbackUrl, description: "Default" });
+  }
 
   const definition = {
     openapi: "3.0.3",
     info: {
       title: "Kodus Billing API",
       version: "1.0.0",
+      license: {
+        name: "MIT",
+        url: "https://opensource.org/licenses/MIT",
+      },
       description:
         "Billing service API documentation for subscriptions, licenses, and Stripe integration.",
     },
-    servers: parseServerUrls(env.serverUrls),
+    servers,
     tags: [
       { name: "Billing", description: "Subscription and license endpoints" },
       { name: "Health", description: "Service health endpoints" },

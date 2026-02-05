@@ -9,8 +9,10 @@ import {
 function getRequestIp(req: Request): string {
   if (req.ip) return req.ip;
   if (req.socket?.remoteAddress) return req.socket.remoteAddress;
-  // @ts-expect-error legacy express typings
-  if (req.connection?.remoteAddress) return req.connection.remoteAddress;
+  const legacyConnection = (
+    req as Request & { connection?: { remoteAddress?: string } }
+  ).connection;
+  if (legacyConnection?.remoteAddress) return legacyConnection.remoteAddress;
   return "";
 }
 
@@ -26,23 +28,27 @@ export function buildDocsGuard() {
 
   return (req: Request, res: Response, next: NextFunction) => {
     if (!parsedAllowlist.length) {
-      return res.status(403).json({ error: "Forbidden" });
+      res.status(403).json({ error: "Forbidden" });
+      return;
     }
 
     if (!basicUser || !basicPass) {
-      return res.status(403).json({ error: "Forbidden" });
+      res.status(403).json({ error: "Forbidden" });
+      return;
     }
 
     const requestIp = getRequestIp(req);
     if (!requestIp || !isIpAllowed(requestIp, parsedAllowlist)) {
-      return res.status(403).json({ error: "Forbidden" });
+      res.status(403).json({ error: "Forbidden" });
+      return;
     }
 
     const authHeader = getAuthHeader(req);
     const creds = parseBasicAuth(authHeader);
     if (!creds || creds.user !== basicUser || creds.pass !== basicPass) {
       res.setHeader("WWW-Authenticate", "Basic");
-      return res.status(401).json({ error: "Unauthorized" });
+      res.status(401).json({ error: "Unauthorized" });
+      return;
     }
 
     return next();
