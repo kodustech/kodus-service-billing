@@ -8,6 +8,7 @@ import subscriptionRoutes from "./routes/subscription.routes";
 import corsOptions from "./config/utils/cors";
 import { setupLifecycleHandlers } from "./config/utils/lifecycle";
 import "dotenv/config";
+import { registerApiDocs } from "./config/docs/registerDocs";
 
 const app: Express = express();
 const port = process.env.API_PORT || 3992;
@@ -40,6 +41,8 @@ app.use((req, res, next) => {
 
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json({ limit: "10mb" }));
+
+registerApiDocs(app);
 
 app.use("/api/billing", subscriptionRoutes);
 
