@@ -43,6 +43,46 @@ app.use(bodyParser.json({ limit: "10mb" }));
 
 app.use("/api/billing", subscriptionRoutes);
 
+/**
+ * @openapi
+ * /health:
+ *   get:
+ *     tags: [Health]
+ *     summary: Liveness probe
+ *     description: Returns basic service status and uptime.
+ *     security: []
+ *     responses:
+ *       "200":
+ *         description: Service is alive.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/HealthResponseDto"
+ *       "400":
+ *         description: Bad request.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "401":
+ *         description: Unauthorized.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "403":
+ *         description: Forbidden.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "500":
+ *         description: Internal server error.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ */
 app.get("/health", (req, res) => {
   res.json({
     status: "ok",
@@ -51,6 +91,52 @@ app.get("/health", (req, res) => {
   });
 });
 
+/**
+ * @openapi
+ * /health/ready:
+ *   get:
+ *     tags: [Health]
+ *     summary: Readiness probe
+ *     description: Checks database and Stripe readiness.
+ *     security: []
+ *     responses:
+ *       "200":
+ *         description: Service is ready.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/HealthReadyResponseDto"
+ *       "503":
+ *         description: Service is not ready.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/HealthReadyResponseDto"
+ *       "400":
+ *         description: Bad request.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "401":
+ *         description: Unauthorized.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "403":
+ *         description: Forbidden.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "500":
+ *         description: Internal server error.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ */
 app.get("/health/ready", async (req, res) => {
   const isDatabaseReady = AppDataSource.isInitialized;
   const isStripeConfigured = !!process.env.STRIPE_SECRET_KEY;
