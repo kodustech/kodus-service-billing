@@ -1,23 +1,8 @@
 require("ts-node/register/transpile-only");
 const assert = require("assert");
 
-const {
-  parseAllowlist,
-  isIpAllowed,
-  parseBasicAuth,
-} = require("../../src/config/docs/access");
+const { parseBasicAuth } = require("../../src/config/docs/access");
 const { buildDocsGuard } = require("../../src/middlewares/apiDocsGuard");
-
-assert.deepStrictEqual(parseAllowlist(""), []);
-assert.deepStrictEqual(parseAllowlist("  "), []);
-assert.deepStrictEqual(parseAllowlist("10.0.0.0/8, 192.168.0.0/16"), [
-  "10.0.0.0/8",
-  "192.168.0.0/16",
-]);
-
-assert.equal(isIpAllowed("1.1.1.1", []), false);
-assert.equal(isIpAllowed("10.10.10.10", ["10.0.0.0/8"]), true);
-assert.equal(isIpAllowed("192.168.1.10", ["10.0.0.0/8"]), false);
 
 assert.deepStrictEqual(parseBasicAuth(undefined), null);
 assert.deepStrictEqual(parseBasicAuth("Bearer abc"), null);
@@ -47,7 +32,6 @@ function makeRes() {
 
 const encodedAuth = Buffer.from("dev:devpass").toString("base64");
 
-process.env.API_DOCS_IP_ALLOWLIST = "";
 process.env.API_DOCS_BASIC_USER = "dev";
 process.env.API_DOCS_BASIC_PASS = "devpass";
 
@@ -59,11 +43,10 @@ process.env.API_DOCS_BASIC_PASS = "devpass";
   guard(req, res, () => {
     nextCalled = true;
   });
-  assert.equal(res.statusCode, 403);
-  assert.equal(nextCalled, false);
+  assert.equal(res.statusCode, 200);
+  assert.equal(nextCalled, true);
 }
 
-process.env.API_DOCS_IP_ALLOWLIST = "10.0.0.0/8";
 process.env.API_DOCS_BASIC_USER = "dev";
 process.env.API_DOCS_BASIC_PASS = "devpass";
 
@@ -75,8 +58,8 @@ process.env.API_DOCS_BASIC_PASS = "devpass";
   guard(req, res, () => {
     nextCalled = true;
   });
-  assert.equal(res.statusCode, 403);
-  assert.equal(nextCalled, false);
+  assert.equal(res.statusCode, 200);
+  assert.equal(nextCalled, true);
 }
 
 {

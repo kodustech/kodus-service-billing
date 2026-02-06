@@ -30,7 +30,6 @@ process.env.API_DOCS_PATH = "/docs";
 process.env.API_DOCS_SPEC_PATH = "/openapi.json";
 process.env.API_DOCS_BASIC_USER = "dev";
 process.env.API_DOCS_BASIC_PASS = "devpass";
-process.env.API_DOCS_IP_ALLOWLIST = "127.0.0.1/32";
 
 {
   const app = makeApp();
