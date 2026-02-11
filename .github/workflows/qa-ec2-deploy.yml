@@ -5,6 +5,10 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+  deployments: write
+
 jobs:
   build_and_push_image:
     name: Build and push image

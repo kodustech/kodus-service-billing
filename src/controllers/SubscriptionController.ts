@@ -265,8 +265,13 @@ export class SubscriptionController {
 
     static async getCustomerPortalUrl(req: Request, res: Response) {
         try {
-            const organizationId = req.params.organizationId;
-            const teamId = req.params.teamId;
+            const { organizationId, teamId } = req.params;
+
+            if (!organizationId || !teamId) {
+                return res.status(400).json({
+                    error: "Organization ID and Team ID are required.",
+                });
+            }
 
             const url = await StripeService.createCustomerPortalSession(
                 organizationId,
