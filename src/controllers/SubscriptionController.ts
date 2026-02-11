@@ -265,8 +265,8 @@ export class SubscriptionController {
 
     static async getCustomerPortalUrl(req: Request, res: Response) {
         try {
-            const organizationId = req.params.organizationId;
-            const teamId = req.params.teamId;
+            const organizationId = req.params.organizationId as string;
+            const teamId = req.params.teamId as string;
 
             const url = await StripeService.createCustomerPortalSession(
                 organizationId,
