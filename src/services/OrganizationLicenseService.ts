@@ -6,7 +6,7 @@ import {
     PlanType,
 } from "../entities/OrganizationLicense";
 import { UserLicense, GitTool, LicenseStatus } from "../entities/UserLicense";
-import { In, LessThan } from "typeorm";
+import { Between, In, LessThan } from "typeorm";
 import { clearCacheByPrefix } from "../config/utils/cache";
 import { buildLogApiUrl } from "../config/utils/urlBuilder";
 import axios from "axios";
@@ -443,6 +443,29 @@ export class OrganizationLicenseService {
         return licenses.map((license) => ({
             git_id: license.git_id,
         }));
+    }
+
+    /**
+     * Returns active trials whose trialEnd falls inside the 24-hour
+     * window starting at `daysAhead` days from now. Lets the
+     * notification cron query "trials expiring in exactly 7 days" or
+     * "exactly 1 day" without re-firing for the same trial on
+     * consecutive runs.
+     *
+     * Read-only — does not mutate license state.
+     */
+    static async findTrialsExpiringInWindow(
+        daysAhead: number
+    ): Promise<OrganizationLicense[]> {
+        const now = Date.now();
+        const windowStart = new Date(now + daysAhead * 24 * 60 * 60 * 1000);
+        const windowEnd = new Date(windowStart.getTime() + 24 * 60 * 60 * 1000);
+        return OrganizationLicenseRepository.find({
+            where: {
+                subscriptionStatus: SubscriptionStatus.TRIAL,
+                trialEnd: Between(windowStart, windowEnd),
+            },
+        });
     }
 
     static async updateExpiredTrials(): Promise<number> {
