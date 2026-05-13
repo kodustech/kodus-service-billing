@@ -36,6 +36,8 @@ KEYS=(
     "/prod/kodus-service-billing/API_BILLING_HOSTNAME_API_ORCHESTRATOR"
     "/prod/kodus-service-billing/API_BILLING_PORT_API_ORCHESTRATOR"
     "/prod/kodus-service-billing/GLOBAL_API_CONTAINER_NAME"
+
+    "/prod/kodus-service-billing/KODUS_NOTIFICATION_WEBHOOK_SECRET"
 )
 
 # Lista de todas as chaves que você precisa
