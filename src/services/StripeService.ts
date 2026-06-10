@@ -152,7 +152,7 @@ export class StripeService {
         ? new Date(invoice.next_payment_attempt * 1000).toISOString()
         : undefined,
       updatePaymentUrl: process.env.FRONTEND_URL
-        ? `${process.env.FRONTEND_URL}/billing`
+        ? `${process.env.FRONTEND_URL}/settings/subscription`
         : undefined,
     }).catch(() => {
       /* unreachable — client swallows internally; defense-in-depth only */
