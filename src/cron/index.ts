@@ -33,7 +33,7 @@ cron.schedule("0 12 * * *", async () => {
             trialEndsAt: trial.trialEnd.toISOString(),
             daysRemaining: daysAhead,
             upgradeUrl: process.env.FRONTEND_URL
-              ? `${process.env.FRONTEND_URL}/billing`
+              ? `${process.env.FRONTEND_URL}/settings/subscription`
               : undefined,
           });
         } catch (perTrialError) {
