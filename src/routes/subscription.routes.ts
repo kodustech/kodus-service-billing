@@ -293,6 +293,54 @@ router.get(
 
 /**
  * @openapi
+ * /api/billing/trial-review-credit/consume:
+ *   post:
+ *     tags: [Billing]
+ *     summary: Consume trial review credit
+ *     description: Atomically consumes one Kodus-funded trial PR review credit. Supplying usageKey makes repeated calls for the same PR idempotent.
+ *     operationId: consumeTrialReviewCredit
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: "#/components/schemas/ConsumeTrialReviewCreditRequestDto"
+ *           example:
+ *             organizationId: org_123
+ *             teamId: team_456
+ *             usageKey: github:repo_123:42
+ *     responses:
+ *       "200":
+ *         description: Credit consumed or previously consumed for this usage key.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ConsumeTrialReviewCreditResponseDto"
+ *       "400":
+ *         description: Invalid request payload.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "402":
+ *         description: No trial credits remain or trial is not valid.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ConsumeTrialReviewCreditResponseDto"
+ *       "500":
+ *         description: Internal server error.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ */
+router.post("/trial-review-credit/consume", async (req, res) => {
+  await SubscriptionController.consumeTrialReviewCredit(req, res);
+});
+
+/**
+ * @openapi
  * /api/billing/assign-license:
  *   post:
  *     tags: [Billing]

@@ -116,10 +116,43 @@ export function buildOpenApiSpec() {
             },
             stripeCustomerId: { type: "string", nullable: true },
             stripeSubscriptionId: { type: "string", nullable: true },
+            byok: { type: "boolean", example: false },
+            trialReviewCreditsTotal: {
+              type: "integer",
+              example: 5,
+            },
+            trialReviewCreditsUsed: { type: "integer", example: 1 },
+            trialReviewCreditsRemaining: {
+              type: "integer",
+              example: 4,
+            },
+            trialCreditTier: { type: "string", example: "base" },
+            trialUnlocks: {
+              type: "array",
+              items: {
+                $ref: "#/components/schemas/TrialUnlockDto",
+              },
+            },
             totalLicenses: { type: "integer", example: 10 },
             assignedLicenses: { type: "integer", example: 5 },
             createdAt: { type: "string", format: "date-time" },
             updatedAt: { type: "string", format: "date-time" },
+          },
+        },
+        TrialUnlockDto: {
+          type: "object",
+          required: ["key", "status"],
+          properties: {
+            key: { type: "string", example: "team_setup" },
+            status: {
+              type: "string",
+              enum: ["locked", "available", "completed", "claimed"],
+              example: "locked",
+            },
+            rewardCredits: { type: "integer", example: 5 },
+            title: { type: "string", example: "Add your team" },
+            description: { type: "string" },
+            completedAt: { type: "string", format: "date-time" },
           },
         },
         UserLicenseDto: {
@@ -231,6 +264,63 @@ export function buildOpenApiSpec() {
             trialEnd: { type: "string", format: "date-time" },
             numberOfLicenses: { type: "integer", example: 20 },
             stripeCustomerId: { type: "string" },
+            byok: { type: "boolean", example: false },
+            trialReviewCreditsTotal: {
+              type: "integer",
+              example: 5,
+            },
+            trialReviewCreditsUsed: { type: "integer", example: 1 },
+            trialReviewCreditsRemaining: {
+              type: "integer",
+              example: 4,
+            },
+            trialCreditTier: { type: "string", example: "base" },
+            trialUnlocks: {
+              type: "array",
+              items: {
+                $ref: "#/components/schemas/TrialUnlockDto",
+              },
+            },
+          },
+        },
+        ConsumeTrialReviewCreditRequestDto: {
+          type: "object",
+          required: ["organizationId", "teamId"],
+          properties: {
+            organizationId: { type: "string", example: "org_123" },
+            teamId: { type: "string", example: "team_456" },
+            usageKey: {
+              type: "string",
+              example: "github:repo_123:42",
+            },
+          },
+        },
+        ConsumeTrialReviewCreditResponseDto: {
+          type: "object",
+          required: ["allowed"],
+          properties: {
+            allowed: { type: "boolean", example: true },
+            reason: {
+              type: "string",
+              example: "TRIAL_REVIEW_CREDITS_EXHAUSTED",
+            },
+            alreadyConsumed: { type: "boolean", example: false },
+            trialReviewCreditsTotal: {
+              type: "integer",
+              example: 5,
+            },
+            trialReviewCreditsUsed: { type: "integer", example: 1 },
+            trialReviewCreditsRemaining: {
+              type: "integer",
+              example: 4,
+            },
+            trialCreditTier: { type: "string", example: "base" },
+            trialUnlocks: {
+              type: "array",
+              items: {
+                $ref: "#/components/schemas/TrialUnlockDto",
+              },
+            },
           },
         },
         CheckUserLicenseResponseDto: {

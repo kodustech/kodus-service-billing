@@ -28,6 +28,30 @@ export enum PlanType {
   ENTERPRISE_MANAGED_ANNUAL = "enterprise_managed_annual",
 }
 
+export enum TrialCreditTier {
+  BASE = "base",
+  TEAM_SIGNAL = "team_signal",
+  QUALIFIED = "qualified",
+  MANUAL = "manual",
+  REFERRAL = "referral",
+}
+
+export enum TrialUnlockStatus {
+  LOCKED = "locked",
+  AVAILABLE = "available",
+  COMPLETED = "completed",
+  CLAIMED = "claimed",
+}
+
+export type TrialUnlock = {
+  key: string;
+  status: TrialUnlockStatus | string;
+  rewardCredits?: number;
+  title?: string;
+  description?: string;
+  completedAt?: string;
+};
+
 @Entity("organization_licenses")
 @Index("IDX_org_licenses_orgid_teamid", ["organizationId", "teamId"])
 @Index("IDX_org_licenses_organizationid", ["organizationId"])
@@ -61,6 +85,24 @@ export class OrganizationLicense {
 
   @Column({ type: "timestamp", nullable: true })
   trialEnd: Date;
+
+  @Column({ default: 0 })
+  trialReviewCreditsTotal: number;
+
+  @Column({ default: 0 })
+  trialReviewCreditsUsed: number;
+
+  @Column({ default: 0 })
+  trialReviewCreditsRemaining: number;
+
+  @Column({ nullable: true })
+  trialCreditTier?: string;
+
+  @Column({ type: "jsonb", default: () => "'[]'::jsonb" })
+  trialUnlocks: TrialUnlock[];
+
+  @Column({ type: "jsonb", default: () => "'[]'::jsonb" })
+  trialReviewCreditUsageKeys: string[];
 
   @Column({ nullable: true })
   stripeCustomerId?: string;
