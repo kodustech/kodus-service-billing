@@ -341,6 +341,51 @@ router.post("/trial-review-credit/consume", async (req, res) => {
 
 /**
  * @openapi
+ * /api/billing/trial-unlocks/recalculate:
+ *   post:
+ *     tags: [Billing]
+ *     summary: Recalculate trial unlocks
+ *     description: Applies automatic trial unlock signals once and returns the updated trial credit state.
+ *     operationId: recalculateTrialUnlocks
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: "#/components/schemas/RecalculateTrialUnlocksRequestDto"
+ *           example:
+ *             organizationId: org_123
+ *             teamId: team_456
+ *             signals:
+ *               companyEmailVerified: true
+ *               workspaceMembersCount: 3
+ *               codeHostMembersCount: 12
+ *     responses:
+ *       "200":
+ *         description: Trial unlocks recalculated.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/RecalculateTrialUnlocksResponseDto"
+ *       "400":
+ *         description: Invalid request payload.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "500":
+ *         description: Internal server error.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ */
+router.post("/trial-unlocks/recalculate", async (req, res) => {
+  await SubscriptionController.recalculateTrialUnlocks(req, res);
+});
+
+/**
+ * @openapi
  * /api/billing/assign-license:
  *   post:
  *     tags: [Billing]

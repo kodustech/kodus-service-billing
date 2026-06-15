@@ -143,14 +143,14 @@ export function buildOpenApiSpec() {
           type: "object",
           required: ["key", "status"],
           properties: {
-            key: { type: "string", example: "team_setup" },
+            key: { type: "string", example: "code_org_10_plus" },
             status: {
               type: "string",
               enum: ["locked", "available", "completed", "claimed"],
               example: "locked",
             },
             rewardCredits: { type: "integer", example: 5 },
-            title: { type: "string", example: "Add your team" },
+            title: { type: "string", example: "Connect a 10+ developer code org" },
             description: { type: "string" },
             completedAt: { type: "string", format: "date-time" },
           },
@@ -320,6 +320,50 @@ export function buildOpenApiSpec() {
               items: {
                 $ref: "#/components/schemas/TrialUnlockDto",
               },
+            },
+          },
+        },
+        TrialUnlockSignalsDto: {
+          type: "object",
+          properties: {
+            companyEmailVerified: { type: "boolean", example: true },
+            workspaceMembersCount: { type: "integer", example: 3 },
+            codeHostMembersCount: { type: "integer", example: 12 },
+            byok: { type: "boolean", example: false },
+          },
+        },
+        RecalculateTrialUnlocksRequestDto: {
+          type: "object",
+          required: ["organizationId", "teamId"],
+          properties: {
+            organizationId: { type: "string", example: "org_123" },
+            teamId: { type: "string", example: "team_456" },
+            signals: { $ref: "#/components/schemas/TrialUnlockSignalsDto" },
+          },
+        },
+        RecalculateTrialUnlocksResponseDto: {
+          type: "object",
+          required: ["valid"],
+          properties: {
+            valid: { type: "boolean", example: true },
+            subscriptionStatus: { $ref: "#/components/schemas/SubscriptionStatus" },
+            planType: { $ref: "#/components/schemas/PlanType" },
+            trialEnd: { type: "string", format: "date-time" },
+            byok: { type: "boolean", example: false },
+            trialReviewCreditsTotal: { type: "integer", example: 35 },
+            trialReviewCreditsUsed: { type: "integer", example: 1 },
+            trialReviewCreditsRemaining: { type: "integer", example: 34 },
+            trialCreditTier: { type: "string", example: "qualified" },
+            trialUnlocks: {
+              type: "array",
+              items: {
+                $ref: "#/components/schemas/TrialUnlockDto",
+              },
+            },
+            appliedUnlocks: {
+              type: "array",
+              items: { type: "string" },
+              example: ["company_email", "team_setup", "code_org_10_plus"],
             },
           },
         },

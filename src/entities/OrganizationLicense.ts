@@ -33,7 +33,6 @@ export enum TrialCreditTier {
   TEAM_SIGNAL = "team_signal",
   QUALIFIED = "qualified",
   MANUAL = "manual",
-  REFERRAL = "referral",
 }
 
 export enum TrialUnlockStatus {

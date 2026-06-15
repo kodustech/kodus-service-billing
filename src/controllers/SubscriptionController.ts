@@ -173,6 +173,35 @@ export class SubscriptionController {
         }
     }
 
+    static async recalculateTrialUnlocks(
+        req: Request,
+        res: Response,
+    ): Promise<Response> {
+        try {
+            const { organizationId, teamId, signals } = req.body;
+
+            if (!organizationId || !teamId) {
+                return res.status(400).json({
+                    error: "ID da organização e teamId são obrigatórios",
+                });
+            }
+
+            const result =
+                await OrganizationLicenseService.recalculateTrialUnlocks(
+                    organizationId,
+                    teamId,
+                    signals ?? {},
+                );
+
+            return res.status(200).json(result);
+        } catch (error) {
+            console.error("Erro ao recalcular unlocks de trial:", error);
+            return res.status(500).json({
+                error: "Erro ao recalcular unlocks de trial",
+            });
+        }
+    }
+
     static async assignLicense(req: Request, res: Response): Promise<Response> {
         try {
             const { organizationId, users, teamId, editedBy, userName } =

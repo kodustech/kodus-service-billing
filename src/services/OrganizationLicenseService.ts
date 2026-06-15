@@ -22,29 +22,96 @@ const TRIAL_REVIEW_CREDITS_INCLUDED = parseInt(
 const isByokPlan = (planType?: PlanType): boolean =>
     Boolean(planType && planType.includes("byok"));
 
+type TrialUnlockSignals = {
+    companyEmailVerified?: boolean;
+    workspaceMembersCount?: number;
+    codeHostMembersCount?: number;
+    byok?: boolean;
+};
+
+const TRIAL_UNLOCK_REWARDS = {
+    company_email: 5,
+    team_setup: 5,
+    code_org_10_plus: 20,
+};
+
 const defaultTrialUnlocks = (planType?: PlanType): TrialUnlock[] => [
+    {
+        key: "company_email",
+        status: TrialUnlockStatus.LOCKED,
+        rewardCredits: TRIAL_UNLOCK_REWARDS.company_email,
+        title: "Use a company email",
+        description:
+            "A confirmed work email helps us qualify the trial automatically.",
+    },
     {
         key: "team_setup",
         status: TrialUnlockStatus.LOCKED,
-        rewardCredits: 5,
+        rewardCredits: TRIAL_UNLOCK_REWARDS.team_setup,
+        title: "Invite 3 teammates",
+        description:
+            "Add teammates so the trial reflects a real review workflow.",
     },
     {
-        key: "multi_author_review",
+        key: "code_org_10_plus",
         status: TrialUnlockStatus.LOCKED,
-        rewardCredits: 5,
+        rewardCredits: TRIAL_UNLOCK_REWARDS.code_org_10_plus,
+        title: "Connect a 10+ developer code org",
+        description:
+            "Connect the organization, not only a personal account, so we can evaluate team fit.",
     },
     {
         key: "byok",
         status: isByokPlan(planType)
             ? TrialUnlockStatus.COMPLETED
             : TrialUnlockStatus.AVAILABLE,
+        title: "Connect BYOK",
+        description: "Use your own AI key. Reviews no longer use Kodus-paid PRs.",
     },
     {
-        key: "referral",
-        status: TrialUnlockStatus.LOCKED,
-        rewardCredits: 5,
+        key: "manual_extension",
+        status: TrialUnlockStatus.AVAILABLE,
+        title: "Request more trial PR reviews",
+        description:
+            "Ask Kodus to review your trial signals and extend the evaluation manually.",
     },
 ];
+
+const mergeTrialUnlocks = (
+    existingUnlocks: TrialUnlock[] | undefined,
+    planType?: PlanType,
+): TrialUnlock[] => {
+    const existingByKey = new Map(
+        (existingUnlocks ?? []).map((unlock) => [unlock.key, unlock]),
+    );
+    const legacyKeyMap: Record<string, string> = {
+        multi_author_review: "code_org_10_plus",
+        manual: "manual_extension",
+    };
+
+    for (const unlock of existingUnlocks ?? []) {
+        const currentKey = legacyKeyMap[unlock.key];
+
+        if (currentKey && !existingByKey.has(currentKey)) {
+            existingByKey.set(currentKey, { ...unlock, key: currentKey });
+        }
+    }
+
+    return defaultTrialUnlocks(planType).map((defaultUnlock) => {
+        const existingUnlock = existingByKey.get(defaultUnlock.key);
+
+        if (!existingUnlock) return defaultUnlock;
+
+        return {
+            ...defaultUnlock,
+            ...existingUnlock,
+            title: defaultUnlock.title,
+            description: defaultUnlock.description,
+            rewardCredits:
+                defaultUnlock.rewardCredits ?? existingUnlock.rewardCredits,
+        };
+    });
+};
 
 const normalizeTrialCredits = (license: OrganizationLicense): boolean => {
     let changed = false;
@@ -87,8 +154,16 @@ const normalizeTrialCredits = (license: OrganizationLicense): boolean => {
         changed = true;
     }
 
-    if (!Array.isArray(license.trialUnlocks) || !license.trialUnlocks.length) {
-        license.trialUnlocks = defaultTrialUnlocks(license.planType);
+    const normalizedUnlocks = mergeTrialUnlocks(
+        Array.isArray(license.trialUnlocks) ? license.trialUnlocks : [],
+        license.planType,
+    );
+
+    if (
+        JSON.stringify(license.trialUnlocks ?? []) !==
+        JSON.stringify(normalizedUnlocks)
+    ) {
+        license.trialUnlocks = normalizedUnlocks;
         changed = true;
     }
 
@@ -534,6 +609,149 @@ export class OrganizationLicenseService {
             stripeCustomerId: license?.stripeCustomerId,
             byok: isByokPlan(license.planType),
         };
+    }
+
+    static async recalculateTrialUnlocks(
+        organizationId: string,
+        teamId: string,
+        signals: TrialUnlockSignals = {},
+    ): Promise<{
+        valid: boolean;
+        subscriptionStatus?: SubscriptionStatus;
+        planType?: PlanType;
+        trialEnd?: Date;
+        byok?: boolean;
+        trialReviewCreditsTotal?: number;
+        trialReviewCreditsUsed?: number;
+        trialReviewCreditsRemaining?: number;
+        trialCreditTier?: string;
+        trialUnlocks?: TrialUnlock[];
+        appliedUnlocks?: string[];
+    }> {
+        const result = await AppDataSource.transaction(async (manager) => {
+            const repository = manager.getRepository(OrganizationLicense);
+            const license = await repository.findOne({
+                where: { organizationId, teamId },
+                lock: { mode: "pessimistic_write" },
+            });
+
+            if (!license) return { valid: false };
+
+            if (license.subscriptionStatus !== SubscriptionStatus.TRIAL) {
+                return {
+                    valid: true,
+                    subscriptionStatus: license.subscriptionStatus,
+                    planType: license.planType,
+                    byok: isByokPlan(license.planType),
+                };
+            }
+
+            const now = new Date();
+            if (license.trialEnd && now > license.trialEnd) {
+                return {
+                    valid: true,
+                    subscriptionStatus: SubscriptionStatus.TRIAL,
+                    planType: license.planType,
+                    trialEnd: license.trialEnd,
+                    ...buildTrialCreditPayload(license),
+                };
+            }
+
+            normalizeTrialCredits(license);
+
+            const appliedUnlocks: string[] = [];
+            const unlocks = mergeTrialUnlocks(
+                license.trialUnlocks,
+                license.planType,
+            );
+            const unlocksByKey = new Map(
+                unlocks.map((unlock) => [unlock.key, unlock]),
+            );
+
+            const completeUnlock = (key: keyof typeof TRIAL_UNLOCK_REWARDS) => {
+                const unlock = unlocksByKey.get(key);
+
+                if (!unlock) return;
+                if (
+                    unlock.status === TrialUnlockStatus.COMPLETED ||
+                    unlock.status === TrialUnlockStatus.CLAIMED
+                ) {
+                    return;
+                }
+
+                const rewardCredits = TRIAL_UNLOCK_REWARDS[key];
+                unlock.status = TrialUnlockStatus.COMPLETED;
+                unlock.completedAt = now.toISOString();
+                unlock.rewardCredits = rewardCredits;
+                license.trialReviewCreditsTotal += rewardCredits;
+                license.trialReviewCreditsRemaining += rewardCredits;
+                appliedUnlocks.push(key);
+            };
+
+            if (signals.companyEmailVerified) completeUnlock("company_email");
+            if ((signals.workspaceMembersCount ?? 0) >= 3) {
+                completeUnlock("team_setup");
+            }
+            if ((signals.codeHostMembersCount ?? 0) >= 10) {
+                completeUnlock("code_org_10_plus");
+            }
+
+            const byokUnlock = unlocksByKey.get("byok");
+            if (byokUnlock) {
+                byokUnlock.status =
+                    isByokPlan(license.planType) || signals.byok
+                        ? TrialUnlockStatus.COMPLETED
+                        : TrialUnlockStatus.AVAILABLE;
+            }
+
+            const manualUnlock = unlocksByKey.get("manual_extension");
+            if (manualUnlock?.status === TrialUnlockStatus.LOCKED) {
+                manualUnlock.status = TrialUnlockStatus.AVAILABLE;
+            }
+
+            license.trialUnlocks = unlocks;
+
+            const manualStatus = unlocksByKey.get("manual_extension")?.status;
+            const codeOrgStatus = unlocksByKey.get("code_org_10_plus")?.status;
+            const isManual =
+                manualStatus === TrialUnlockStatus.COMPLETED ||
+                manualStatus === TrialUnlockStatus.CLAIMED;
+            const isQualified =
+                codeOrgStatus === TrialUnlockStatus.COMPLETED ||
+                codeOrgStatus === TrialUnlockStatus.CLAIMED;
+            const hasTeamSignal = ["company_email", "team_setup"].some(
+                (key) => {
+                    const status = unlocksByKey.get(key)?.status;
+                    return (
+                        status === TrialUnlockStatus.COMPLETED ||
+                        status === TrialUnlockStatus.CLAIMED
+                    );
+                },
+            );
+
+            license.trialCreditTier = isManual
+                ? TrialCreditTier.MANUAL
+                : isQualified
+                  ? TrialCreditTier.QUALIFIED
+                  : hasTeamSignal
+                    ? TrialCreditTier.TEAM_SIGNAL
+                    : TrialCreditTier.BASE;
+
+            await repository.save(license);
+
+            return {
+                valid: true,
+                subscriptionStatus: SubscriptionStatus.TRIAL,
+                planType: license.planType,
+                trialEnd: license.trialEnd,
+                ...buildTrialCreditPayload(license),
+                appliedUnlocks,
+            };
+        });
+
+        clearCacheByPrefix("org-license");
+
+        return result;
     }
 
     static async consumeTrialReviewCredit(
