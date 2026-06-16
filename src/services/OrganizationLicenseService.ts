@@ -113,7 +113,9 @@ const mergeTrialUnlocks = (
     });
 };
 
-const normalizeTrialCredits = (license: OrganizationLicense): boolean => {
+export const normalizeTrialCredits = (
+    license: OrganizationLicense,
+): boolean => {
     // Legacy trials (created before the credit model) have a NULL total. They
     // must keep the old unlimited-reviews behavior, so never bootstrap credits
     // onto them — leave every credit field untouched.
@@ -781,6 +783,17 @@ export class OrganizationLicenseService {
                 return {
                     allowed: true,
                     reason: "NOT_TRIAL",
+                };
+            }
+
+            // Legacy trials (created before the credit model) have NULL credits
+            // and keep unlimited reviews — never gate them. (Defense in depth:
+            // the API already skips consume for these, but guard here too so a
+            // direct call can't trip the `remaining <= 0` check on a NULL.)
+            if (license.trialReviewCreditsTotal == null) {
+                return {
+                    allowed: true,
+                    reason: "LEGACY_TRIAL",
                 };
             }
 
