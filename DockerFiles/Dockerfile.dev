@@ -7,14 +7,17 @@ EXPOSE ${PORT}
 # Defina a variável de ambiente NODE_ENV para "development"
 ENV NODE_ENV=development
 
+# pnpm via corepack (versão fixada no campo packageManager do package.json)
+RUN corepack enable && corepack prepare pnpm@10.34.1 --activate
+
 # Copie os arquivos do projeto
-COPY package.json yarn.lock ./
+COPY package.json pnpm-lock.yaml ./
 
 # Instale todas as dependências
-RUN yarn install
+RUN pnpm install --frozen-lockfile
 
 # Copie o resto dos arquivos
 COPY . .
 
 # Comando de inicialização para desenvolvimento
-CMD ["yarn", "start:dev"] 
+CMD ["pnpm", "start:dev"]

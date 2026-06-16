@@ -16,7 +16,7 @@ services:
         env_file:
             - .env
         command: >
-            sh -lc "yarn install --check-files && yarn start:dev"
+            sh -lc "corepack enable && pnpm install && pnpm start:dev"
         networks:
             - kodus-backend-services
             - shared-network

@@ -5,17 +5,20 @@ WORKDIR /app
 # Configurar PM2 para usar pasta local dentro do volume de logs
 ENV PM2_HOME=/app/logs/.pm2
 
+# pnpm via corepack (versão fixada no package.json)
+RUN corepack enable && corepack prepare pnpm@10.34.1 --activate
+
 # Instalação de Dependências
-COPY package.json yarn.lock ./
+COPY package.json pnpm-lock.yaml ./
 
 # Copiando a aplicação
 COPY . .
 
-# Instale apenas as dependências de produção
-RUN yarn install && yarn build
+# Instale dependências e buildar
+RUN pnpm install --frozen-lockfile && pnpm build
 
-# Instalação do PM2
-RUN yarn global add pm2
+# Instalação do PM2 (ferramenta global)
+RUN npm install -g pm2
 
 # Instalação do pm2-logrotate
 RUN pm2 install pm2-logrotate
