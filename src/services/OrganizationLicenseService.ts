@@ -114,13 +114,14 @@ const mergeTrialUnlocks = (
 };
 
 const normalizeTrialCredits = (license: OrganizationLicense): boolean => {
-    let changed = false;
-    const shouldBootstrapCredits = !license.trialReviewCreditsTotal;
-
-    if (shouldBootstrapCredits) {
-        license.trialReviewCreditsTotal = TRIAL_REVIEW_CREDITS_INCLUDED;
-        changed = true;
+    // Legacy trials (created before the credit model) have a NULL total. They
+    // must keep the old unlimited-reviews behavior, so never bootstrap credits
+    // onto them — leave every credit field untouched.
+    if (license.trialReviewCreditsTotal == null) {
+        return false;
     }
+
+    let changed = false;
 
     const trialReviewCreditsUsed = Math.max(
         0,
@@ -132,16 +133,10 @@ const normalizeTrialCredits = (license: OrganizationLicense): boolean => {
         changed = true;
     }
 
-    const shouldBootstrapRemaining =
-        shouldBootstrapCredits &&
-        !license.trialReviewCreditsRemaining &&
-        trialReviewCreditsUsed === 0;
     const trialReviewCreditsRemaining = Math.max(
         0,
-        shouldBootstrapRemaining
-            ? license.trialReviewCreditsTotal - trialReviewCreditsUsed
-            : (license.trialReviewCreditsRemaining ??
-                  license.trialReviewCreditsTotal - trialReviewCreditsUsed),
+        license.trialReviewCreditsRemaining ??
+            license.trialReviewCreditsTotal - trialReviewCreditsUsed,
     );
 
     if (license.trialReviewCreditsRemaining !== trialReviewCreditsRemaining) {

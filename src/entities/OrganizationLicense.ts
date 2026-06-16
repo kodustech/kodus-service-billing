@@ -85,14 +85,17 @@ export class OrganizationLicense {
   @Column({ type: "timestamp", nullable: true })
   trialEnd: Date;
 
-  @Column({ default: 0 })
-  trialReviewCreditsTotal: number;
+  // Nullable on purpose: a NULL total marks a "legacy" trial (created before
+  // the credit model) that must keep unlimited reviews. New trials get these
+  // set explicitly in createTrialLicense.
+  @Column({ type: "integer", nullable: true })
+  trialReviewCreditsTotal: number | null;
 
-  @Column({ default: 0 })
-  trialReviewCreditsUsed: number;
+  @Column({ type: "integer", nullable: true })
+  trialReviewCreditsUsed: number | null;
 
-  @Column({ default: 0 })
-  trialReviewCreditsRemaining: number;
+  @Column({ type: "integer", nullable: true })
+  trialReviewCreditsRemaining: number | null;
 
   @Column({ nullable: true })
   trialCreditTier?: string;

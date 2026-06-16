@@ -39,11 +39,11 @@
         "enterprise_byok_annual"
       ],
       "label": "Enterprise",
-      "description": "For large or regulated orgs that require hardened security, auditability, and hands-on onboarding—in.",
+      "description": "For large or regulated orgs that require hardened security, auditability, and hands-on onboarding.",
       "type": "contact",
       "features": [
         "SSO / SAML",
-        "SOC 2 in progress",
+        "SOC 2 compliant",
         "RBAC + Audit logs and analytics",
         "Up to 5 hours month dedicated support with personalized onboarding",
         "Private Discord Channel and Email Support"

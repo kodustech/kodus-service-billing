@@ -4,17 +4,22 @@ export class AddTrialReviewCredits1781538000000 implements MigrationInterface {
   name = "AddTrialReviewCredits1781538000000";
 
   public async up(queryRunner: QueryRunner): Promise<void> {
+    // Nullable, NO default: existing (legacy) trials stay NULL and keep their
+    // old unlimited-reviews behavior. A NULL `trialReviewCreditsTotal` is the
+    // "legacy trial" marker the API checks. Only trials created after this
+    // ships get credits — set explicitly in createTrialLicense. We deliberately
+    // do NOT backfill existing trials, so nobody mid-trial gets capped.
     await queryRunner.query(`
             ALTER TABLE "billing"."organization_licenses"
-            ADD "trialReviewCreditsTotal" integer NOT NULL DEFAULT 0
+            ADD "trialReviewCreditsTotal" integer
         `);
     await queryRunner.query(`
             ALTER TABLE "billing"."organization_licenses"
-            ADD "trialReviewCreditsUsed" integer NOT NULL DEFAULT 0
+            ADD "trialReviewCreditsUsed" integer
         `);
     await queryRunner.query(`
             ALTER TABLE "billing"."organization_licenses"
-            ADD "trialReviewCreditsRemaining" integer NOT NULL DEFAULT 0
+            ADD "trialReviewCreditsRemaining" integer
         `);
     await queryRunner.query(`
             ALTER TABLE "billing"."organization_licenses"
@@ -27,31 +32,6 @@ export class AddTrialReviewCredits1781538000000 implements MigrationInterface {
     await queryRunner.query(`
             ALTER TABLE "billing"."organization_licenses"
             ADD "trialReviewCreditUsageKeys" jsonb NOT NULL DEFAULT '[]'::jsonb
-        `);
-
-    await queryRunner.query(`
-            UPDATE "billing"."organization_licenses"
-            SET
-                "trialReviewCreditsTotal" = 5,
-                "trialReviewCreditsUsed" = 0,
-                "trialReviewCreditsRemaining" = 5,
-                "trialCreditTier" = 'base',
-                "trialUnlocks" = CASE
-                    WHEN "planType"::text LIKE '%byok%' THEN '[
-                        {"key":"team_setup","status":"locked","rewardCredits":5},
-                        {"key":"multi_author_review","status":"locked","rewardCredits":5},
-                        {"key":"byok","status":"completed"},
-                        {"key":"referral","status":"locked","rewardCredits":5}
-                    ]'::jsonb
-                    ELSE '[
-                        {"key":"team_setup","status":"locked","rewardCredits":5},
-                        {"key":"multi_author_review","status":"locked","rewardCredits":5},
-                        {"key":"byok","status":"available"},
-                        {"key":"referral","status":"locked","rewardCredits":5}
-                    ]'::jsonb
-                END
-            WHERE "subscriptionStatus" = 'trial'
-              AND "trialReviewCreditsTotal" = 0
         `);
   }
 
