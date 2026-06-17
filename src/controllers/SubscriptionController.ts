@@ -24,7 +24,7 @@ export class SubscriptionController {
             const license = await OrganizationLicenseService.createTrialLicense(
                 organizationId,
                 teamId,
-                planType
+                planType,
             );
 
             return res.status(201).json(license);
@@ -50,7 +50,7 @@ export class SubscriptionController {
 
     static async createCheckoutSession(
         req: Request,
-        res: Response
+        res: Response,
     ): Promise<Response> {
         try {
             const { organizationId, quantity, teamId, planType } = req.body;
@@ -65,7 +65,7 @@ export class SubscriptionController {
                 organizationId,
                 quantity,
                 teamId,
-                planType || PlanType.TEAMS_MANAGED_LEGACY
+                planType || PlanType.TEAMS_MANAGED_LEGACY,
             );
 
             return res.json({ url: checkoutUrl });
@@ -90,7 +90,7 @@ export class SubscriptionController {
             const event = stripe.webhooks.constructEvent(
                 req.body,
                 sig,
-                process.env.STRIPE_WEBHOOK_SECRET || ""
+                process.env.STRIPE_WEBHOOK_SECRET || "",
             );
 
             console.log("Webhook event processado com sucesso:", event.type);
@@ -117,7 +117,7 @@ export class SubscriptionController {
 
     static async validateLicense(
         req: Request,
-        res: Response
+        res: Response,
     ): Promise<Response> {
         try {
             const { organizationId, teamId } = req.query;
@@ -130,13 +130,75 @@ export class SubscriptionController {
 
             const result = await OrganizationLicenseService.validateLicense(
                 organizationId as string,
-                teamId as string
+                teamId as string,
             );
 
             return res.json(result);
         } catch (error) {
             console.error("Erro ao validar token:", error);
             return res.status(500).json({ error: "Erro ao validar token" });
+        }
+    }
+
+    static async consumeTrialReviewCredit(
+        req: Request,
+        res: Response,
+    ): Promise<Response> {
+        try {
+            const { organizationId, teamId, usageKey } = req.body;
+
+            if (!organizationId || !teamId) {
+                return res.status(400).json({
+                    error: "ID da organização e teamId são obrigatórios",
+                });
+            }
+
+            const result =
+                await OrganizationLicenseService.consumeTrialReviewCredit(
+                    organizationId,
+                    teamId,
+                    usageKey,
+                );
+
+            if (!result.allowed) {
+                return res.status(402).json(result);
+            }
+
+            return res.status(200).json(result);
+        } catch (error) {
+            console.error("Erro ao consumir crédito de trial:", error);
+            return res.status(500).json({
+                error: "Erro ao consumir crédito de trial",
+            });
+        }
+    }
+
+    static async recalculateTrialUnlocks(
+        req: Request,
+        res: Response,
+    ): Promise<Response> {
+        try {
+            const { organizationId, teamId, signals } = req.body;
+
+            if (!organizationId || !teamId) {
+                return res.status(400).json({
+                    error: "ID da organização e teamId são obrigatórios",
+                });
+            }
+
+            const result =
+                await OrganizationLicenseService.recalculateTrialUnlocks(
+                    organizationId,
+                    teamId,
+                    signals ?? {},
+                );
+
+            return res.status(200).json(result);
+        } catch (error) {
+            console.error("Erro ao recalcular unlocks de trial:", error);
+            return res.status(500).json({
+                error: "Erro ao recalcular unlocks de trial",
+            });
         }
     }
 
@@ -177,7 +239,7 @@ export class SubscriptionController {
                 await OrganizationLicenseService.assignLicensesToUsers(
                     organizationId,
                     teamId,
-                    usersArray
+                    usersArray,
                 );
 
             if (results.successful.length > 0) {
@@ -186,11 +248,11 @@ export class SubscriptionController {
                     organizationId,
                     teamId,
                     editedBy,
-                    userName
+                    userName,
                 ).catch((error) => {
                     console.error(
                         "Erro ao tentar registrar log de status:",
-                        error
+                        error,
                     );
                 });
             }
@@ -209,7 +271,7 @@ export class SubscriptionController {
 
     static async checkUserLicense(
         req: Request,
-        res: Response
+        res: Response,
     ): Promise<Response> {
         try {
             const { organizationId, gitId, teamId } = req.query;
@@ -223,7 +285,7 @@ export class SubscriptionController {
             const license = await OrganizationLicenseService.checkUserLicense(
                 organizationId as string,
                 gitId as string,
-                teamId as string
+                teamId as string,
             );
 
             return res.status(200).json(license);
@@ -237,7 +299,7 @@ export class SubscriptionController {
 
     static async getAllUsersWithLicense(
         req: Request,
-        res: Response
+        res: Response,
     ): Promise<Response> {
         try {
             const { organizationId, teamId } = req.query;
@@ -251,7 +313,7 @@ export class SubscriptionController {
             const licenses =
                 await OrganizationLicenseService.getAllUsersWithLicense(
                     organizationId as string,
-                    teamId as string
+                    teamId as string,
                 );
 
             return res.status(200).json(licenses);
@@ -275,7 +337,7 @@ export class SubscriptionController {
 
             const url = await StripeService.createCustomerPortalSession(
                 organizationId,
-                teamId
+                teamId,
             );
 
             return res.json({ url });
@@ -321,7 +383,7 @@ export class SubscriptionController {
             const updatedLicense = await OrganizationLicenseService.updateTrial(
                 organizationId,
                 teamId,
-                new Date(trialEnd)
+                new Date(trialEnd),
             );
 
             return res.status(200).json(updatedLicense);
@@ -335,7 +397,7 @@ export class SubscriptionController {
 
     static async migrateToFreePlan(
         req: Request,
-        res: Response
+        res: Response,
     ): Promise<Response> {
         try {
             const { organizationId, teamId } = req.body;
@@ -348,7 +410,7 @@ export class SubscriptionController {
 
             const license = await OrganizationLicenseService.migrateToFreePlan(
                 organizationId,
-                teamId
+                teamId,
             );
 
             return res.json({ success: true, license });

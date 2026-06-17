@@ -4,18 +4,195 @@ import {
     OrganizationLicense,
     SubscriptionStatus,
     PlanType,
+    TrialCreditTier,
+    TrialUnlock,
+    TrialUnlockStatus,
 } from "../entities/OrganizationLicense";
 import { UserLicense, GitTool, LicenseStatus } from "../entities/UserLicense";
 import { Between, In, LessThan } from "typeorm";
 import { clearCacheByPrefix } from "../config/utils/cache";
 import { buildLogApiUrl } from "../config/utils/urlBuilder";
 import axios from "axios";
+import { AppDataSource } from "../config/database";
+
+const rawTrialReviewCredits = parseInt(
+    process.env.TRIAL_REVIEW_CREDITS_INCLUDED || "5",
+    10,
+);
+// Guard against a non-numeric env value: NaN would propagate into
+// trialReviewCreditsTotal (credits never exhaust) and Postgres rejects NaN on
+// the integer column at save time.
+const TRIAL_REVIEW_CREDITS_INCLUDED = Number.isNaN(rawTrialReviewCredits)
+    ? 5
+    : Math.max(0, rawTrialReviewCredits);
+
+const isByokPlan = (planType?: PlanType): boolean =>
+    Boolean(planType && planType.includes("byok"));
+
+type TrialUnlockSignals = {
+    companyEmailVerified?: boolean;
+    workspaceMembersCount?: number;
+    codeHostMembersCount?: number;
+    byok?: boolean;
+};
+
+const TRIAL_UNLOCK_REWARDS = {
+    company_email: 5,
+    team_setup: 5,
+    code_org_10_plus: 20,
+};
+
+const defaultTrialUnlocks = (planType?: PlanType): TrialUnlock[] => [
+    {
+        key: "company_email",
+        status: TrialUnlockStatus.LOCKED,
+        rewardCredits: TRIAL_UNLOCK_REWARDS.company_email,
+        title: "Use a company email",
+        description:
+            "A confirmed work email helps us qualify the trial automatically.",
+    },
+    {
+        key: "team_setup",
+        status: TrialUnlockStatus.LOCKED,
+        rewardCredits: TRIAL_UNLOCK_REWARDS.team_setup,
+        title: "Invite 3 teammates",
+        description:
+            "Add teammates so the trial reflects a real review workflow.",
+    },
+    {
+        key: "code_org_10_plus",
+        status: TrialUnlockStatus.LOCKED,
+        rewardCredits: TRIAL_UNLOCK_REWARDS.code_org_10_plus,
+        title: "Connect a 10+ developer code org",
+        description:
+            "Connect the organization, not only a personal account, so we can evaluate team fit.",
+    },
+    {
+        key: "byok",
+        status: isByokPlan(planType)
+            ? TrialUnlockStatus.COMPLETED
+            : TrialUnlockStatus.AVAILABLE,
+        title: "Connect BYOK",
+        description: "Use your own AI key. Reviews no longer use Kodus-paid PRs.",
+    },
+    {
+        key: "manual_extension",
+        status: TrialUnlockStatus.AVAILABLE,
+        title: "Request more trial PR reviews",
+        description:
+            "Ask Kodus to review your trial signals and extend the evaluation manually.",
+    },
+];
+
+const mergeTrialUnlocks = (
+    existingUnlocks: TrialUnlock[] | undefined,
+    planType?: PlanType,
+): TrialUnlock[] => {
+    const existingByKey = new Map(
+        (existingUnlocks ?? []).map((unlock) => [unlock.key, unlock]),
+    );
+    const legacyKeyMap: Record<string, string> = {
+        multi_author_review: "code_org_10_plus",
+        manual: "manual_extension",
+    };
+
+    for (const unlock of existingUnlocks ?? []) {
+        const currentKey = legacyKeyMap[unlock.key];
+
+        if (currentKey && !existingByKey.has(currentKey)) {
+            existingByKey.set(currentKey, { ...unlock, key: currentKey });
+        }
+    }
+
+    return defaultTrialUnlocks(planType).map((defaultUnlock) => {
+        const existingUnlock = existingByKey.get(defaultUnlock.key);
+
+        if (!existingUnlock) return defaultUnlock;
+
+        return {
+            ...defaultUnlock,
+            ...existingUnlock,
+            title: defaultUnlock.title,
+            description: defaultUnlock.description,
+            rewardCredits:
+                defaultUnlock.rewardCredits ?? existingUnlock.rewardCredits,
+        };
+    });
+};
+
+export const normalizeTrialCredits = (
+    license: OrganizationLicense,
+): boolean => {
+    // Legacy trials (created before the credit model) have a NULL total. They
+    // must keep the old unlimited-reviews behavior, so never bootstrap credits
+    // onto them — leave every credit field untouched.
+    if (license.trialReviewCreditsTotal == null) {
+        return false;
+    }
+
+    let changed = false;
+
+    const trialReviewCreditsUsed = Math.max(
+        0,
+        license.trialReviewCreditsUsed || 0,
+    );
+
+    if (license.trialReviewCreditsUsed !== trialReviewCreditsUsed) {
+        license.trialReviewCreditsUsed = trialReviewCreditsUsed;
+        changed = true;
+    }
+
+    const trialReviewCreditsRemaining = Math.max(
+        0,
+        license.trialReviewCreditsRemaining ??
+            license.trialReviewCreditsTotal - trialReviewCreditsUsed,
+    );
+
+    if (license.trialReviewCreditsRemaining !== trialReviewCreditsRemaining) {
+        license.trialReviewCreditsRemaining = trialReviewCreditsRemaining;
+        changed = true;
+    }
+
+    if (!license.trialCreditTier) {
+        license.trialCreditTier = TrialCreditTier.BASE;
+        changed = true;
+    }
+
+    const normalizedUnlocks = mergeTrialUnlocks(
+        Array.isArray(license.trialUnlocks) ? license.trialUnlocks : [],
+        license.planType,
+    );
+
+    if (
+        JSON.stringify(license.trialUnlocks ?? []) !==
+        JSON.stringify(normalizedUnlocks)
+    ) {
+        license.trialUnlocks = normalizedUnlocks;
+        changed = true;
+    }
+
+    if (!Array.isArray(license.trialReviewCreditUsageKeys)) {
+        license.trialReviewCreditUsageKeys = [];
+        changed = true;
+    }
+
+    return changed;
+};
+
+const buildTrialCreditPayload = (license: OrganizationLicense) => ({
+    byok: isByokPlan(license.planType),
+    trialReviewCreditsTotal: license.trialReviewCreditsTotal,
+    trialReviewCreditsUsed: license.trialReviewCreditsUsed,
+    trialReviewCreditsRemaining: license.trialReviewCreditsRemaining,
+    trialCreditTier: license.trialCreditTier,
+    trialUnlocks: license.trialUnlocks,
+});
 
 export class OrganizationLicenseService {
     static async createTrialLicense(
         organizationId: string,
         teamId: string,
-        planType: PlanType = PlanType.TEAMS_MANAGED
+        planType: PlanType = PlanType.TEAMS_MANAGED,
     ): Promise<OrganizationLicense> {
         // Verifica se já existe uma licença para essa organização e time
         const existingLicense = await OrganizationLicenseRepository.findOne({
@@ -24,7 +201,7 @@ export class OrganizationLicenseService {
 
         if (existingLicense) {
             throw new Error(
-                "Já existe uma licença para esta organização e time"
+                "Já existe uma licença para esta organização e time",
             );
         }
 
@@ -38,6 +215,12 @@ export class OrganizationLicenseService {
             subscriptionStatus: SubscriptionStatus.TRIAL,
             planType,
             trialEnd,
+            trialReviewCreditsTotal: TRIAL_REVIEW_CREDITS_INCLUDED,
+            trialReviewCreditsUsed: 0,
+            trialReviewCreditsRemaining: TRIAL_REVIEW_CREDITS_INCLUDED,
+            trialCreditTier: TrialCreditTier.BASE,
+            trialUnlocks: defaultTrialUnlocks(planType),
+            trialReviewCreditUsageKeys: [],
             totalLicenses: 0,
             assignedLicenses: 0,
         });
@@ -59,7 +242,7 @@ export class OrganizationLicenseService {
             gitId: string;
             gitTool: GitTool;
             licenseStatus: LicenseStatus;
-        }>
+        }>,
     ): Promise<{
         successful: UserLicense[];
         failed: Array<{
@@ -93,7 +276,7 @@ export class OrganizationLicenseService {
             if (orgLicense.trialEnd && now > orgLicense.trialEnd) {
                 await this.migrateToFreePlan(organizationId, teamId);
                 throw new Error(
-                    "A licença trial desta organização expirou e ela foi migrada para o plano gratuito"
+                    "A licença trial desta organização expirou e ela foi migrada para o plano gratuito",
                 );
             }
         }
@@ -108,7 +291,7 @@ export class OrganizationLicenseService {
 
         // Mapear usuários que já têm licença
         const existingLicenseMap = new Map(
-            existingLicenses.map((license) => [license.git_id, license])
+            existingLicenses.map((license) => [license.git_id, license]),
         );
 
         // Verificar licenças disponíveis
@@ -276,7 +459,7 @@ export class OrganizationLicenseService {
             email: string;
             userId: string;
         },
-        userName: string
+        userName: string,
     ): Promise<void> {
         try {
             // Processa cada licença individualmente
@@ -303,7 +486,7 @@ export class OrganizationLicenseService {
         } catch (error) {
             throw new Error(
                 "Erro ao registrar log de mudanças de status:",
-                error
+                error,
             );
         }
     }
@@ -314,7 +497,7 @@ export class OrganizationLicenseService {
         teamId: string,
         userId: string,
         gitId: string,
-        gitTool: GitTool
+        gitTool: GitTool,
     ): Promise<UserLicense> {
         const result = await this.assignLicensesToUsers(
             organizationId,
@@ -325,7 +508,7 @@ export class OrganizationLicenseService {
                     gitTool,
                     licenseStatus: LicenseStatus.ACTIVE,
                 },
-            ]
+            ],
         );
 
         if (result.failed.length > 0) {
@@ -338,7 +521,7 @@ export class OrganizationLicenseService {
     static async checkUserLicense(
         organizationId: string,
         userId: string,
-        teamId: string
+        teamId: string,
     ): Promise<any> {
         const license = await UserLicenseRepository.findOne({
             where: {
@@ -352,7 +535,7 @@ export class OrganizationLicenseService {
 
     static async validateLicense(
         organizationId: string,
-        teamId: string
+        teamId: string,
     ): Promise<{
         valid: boolean;
         subscriptionStatus?: SubscriptionStatus;
@@ -360,6 +543,12 @@ export class OrganizationLicenseService {
         trialEnd?: Date;
         numberOfLicenses?: number;
         stripeCustomerId?: string;
+        byok?: boolean;
+        trialReviewCreditsTotal?: number;
+        trialReviewCreditsUsed?: number;
+        trialReviewCreditsRemaining?: number;
+        trialCreditTier?: string;
+        trialUnlocks?: TrialUnlock[];
     }> {
         const license = await OrganizationLicenseRepository.findOne({
             where: { organizationId, teamId },
@@ -375,6 +564,7 @@ export class OrganizationLicenseService {
                 subscriptionStatus: license.subscriptionStatus,
                 numberOfLicenses: license.totalLicenses,
                 stripeCustomerId: license?.stripeCustomerId,
+                byok: isByokPlan(license.planType),
             };
         }
 
@@ -384,7 +574,7 @@ export class OrganizationLicenseService {
             if (license.trialEnd && now > license.trialEnd) {
                 const migratedLicense = await this.migrateToFreePlan(
                     license.organizationId,
-                    license.teamId
+                    license.teamId,
                 );
                 return {
                     valid: true,
@@ -392,7 +582,12 @@ export class OrganizationLicenseService {
                     planType: migratedLicense.planType,
                     numberOfLicenses: migratedLicense.totalLicenses,
                     stripeCustomerId: migratedLicense?.stripeCustomerId,
+                    byok: isByokPlan(migratedLicense.planType),
                 };
+            }
+
+            if (normalizeTrialCredits(license)) {
+                await OrganizationLicenseRepository.save(license);
             }
 
             // Se está em trial e não expirou, retorna com a data
@@ -402,6 +597,7 @@ export class OrganizationLicenseService {
                 planType: license.planType,
                 trialEnd: license.trialEnd,
                 stripeCustomerId: license?.stripeCustomerId,
+                ...buildTrialCreditPayload(license),
             };
         }
 
@@ -415,12 +611,281 @@ export class OrganizationLicenseService {
             planType: license.planType,
             numberOfLicenses: license.totalLicenses,
             stripeCustomerId: license?.stripeCustomerId,
+            byok: isByokPlan(license.planType),
         };
+    }
+
+    static async recalculateTrialUnlocks(
+        organizationId: string,
+        teamId: string,
+        signals: TrialUnlockSignals = {},
+    ): Promise<{
+        valid: boolean;
+        subscriptionStatus?: SubscriptionStatus;
+        planType?: PlanType;
+        trialEnd?: Date;
+        byok?: boolean;
+        trialReviewCreditsTotal?: number;
+        trialReviewCreditsUsed?: number;
+        trialReviewCreditsRemaining?: number;
+        trialCreditTier?: string;
+        trialUnlocks?: TrialUnlock[];
+        appliedUnlocks?: string[];
+    }> {
+        const result = await AppDataSource.transaction(async (manager) => {
+            const repository = manager.getRepository(OrganizationLicense);
+            const license = await repository.findOne({
+                where: { organizationId, teamId },
+                lock: { mode: "pessimistic_write" },
+            });
+
+            if (!license) return { valid: false };
+
+            if (license.subscriptionStatus !== SubscriptionStatus.TRIAL) {
+                return {
+                    valid: true,
+                    subscriptionStatus: license.subscriptionStatus,
+                    planType: license.planType,
+                    byok: isByokPlan(license.planType),
+                };
+            }
+
+            const now = new Date();
+            if (license.trialEnd && now > license.trialEnd) {
+                // Expired trial is no longer an active trial. Mirror the intent
+                // of validateLicense/consume (which migrate/block expired
+                // trials) by reporting invalid so callers don't treat it as
+                // active. Migration to free still happens via validateLicense.
+                return {
+                    valid: false,
+                    subscriptionStatus: SubscriptionStatus.TRIAL,
+                    planType: license.planType,
+                    trialEnd: license.trialEnd,
+                    ...buildTrialCreditPayload(license),
+                };
+            }
+
+            normalizeTrialCredits(license);
+
+            // Legacy trial (NULL credits) keeps unlimited reviews — never
+            // assign credits via unlock signals. `null += reward` would coerce
+            // to a number (JS) and silently cap an unlimited trial, so preserve
+            // the NULL marker and return without touching credits or unlocks.
+            if (license.trialReviewCreditsTotal == null) {
+                return {
+                    valid: true,
+                    subscriptionStatus: SubscriptionStatus.TRIAL,
+                    planType: license.planType,
+                    trialEnd: license.trialEnd,
+                    ...buildTrialCreditPayload(license),
+                };
+            }
+
+            const appliedUnlocks: string[] = [];
+            const unlocks = mergeTrialUnlocks(
+                license.trialUnlocks,
+                license.planType,
+            );
+            const unlocksByKey = new Map(
+                unlocks.map((unlock) => [unlock.key, unlock]),
+            );
+
+            const completeUnlock = (key: keyof typeof TRIAL_UNLOCK_REWARDS) => {
+                const unlock = unlocksByKey.get(key);
+
+                if (!unlock) return;
+                if (
+                    unlock.status === TrialUnlockStatus.COMPLETED ||
+                    unlock.status === TrialUnlockStatus.CLAIMED
+                ) {
+                    return;
+                }
+
+                const rewardCredits = TRIAL_UNLOCK_REWARDS[key];
+                unlock.status = TrialUnlockStatus.COMPLETED;
+                unlock.completedAt = now.toISOString();
+                unlock.rewardCredits = rewardCredits;
+                license.trialReviewCreditsTotal += rewardCredits;
+                license.trialReviewCreditsRemaining += rewardCredits;
+                appliedUnlocks.push(key);
+            };
+
+            if (signals.companyEmailVerified) completeUnlock("company_email");
+            if ((signals.workspaceMembersCount ?? 0) >= 3) {
+                completeUnlock("team_setup");
+            }
+            if ((signals.codeHostMembersCount ?? 0) >= 10) {
+                completeUnlock("code_org_10_plus");
+            }
+
+            const byokUnlock = unlocksByKey.get("byok");
+            if (byokUnlock) {
+                byokUnlock.status =
+                    isByokPlan(license.planType) || signals.byok
+                        ? TrialUnlockStatus.COMPLETED
+                        : TrialUnlockStatus.AVAILABLE;
+            }
+
+            const manualUnlock = unlocksByKey.get("manual_extension");
+            if (manualUnlock?.status === TrialUnlockStatus.LOCKED) {
+                manualUnlock.status = TrialUnlockStatus.AVAILABLE;
+            }
+
+            license.trialUnlocks = unlocks;
+
+            const manualStatus = unlocksByKey.get("manual_extension")?.status;
+            const codeOrgStatus = unlocksByKey.get("code_org_10_plus")?.status;
+            const isManual =
+                manualStatus === TrialUnlockStatus.COMPLETED ||
+                manualStatus === TrialUnlockStatus.CLAIMED;
+            const isQualified =
+                codeOrgStatus === TrialUnlockStatus.COMPLETED ||
+                codeOrgStatus === TrialUnlockStatus.CLAIMED;
+            const hasTeamSignal = ["company_email", "team_setup"].some(
+                (key) => {
+                    const status = unlocksByKey.get(key)?.status;
+                    return (
+                        status === TrialUnlockStatus.COMPLETED ||
+                        status === TrialUnlockStatus.CLAIMED
+                    );
+                },
+            );
+
+            license.trialCreditTier = isManual
+                ? TrialCreditTier.MANUAL
+                : isQualified
+                  ? TrialCreditTier.QUALIFIED
+                  : hasTeamSignal
+                    ? TrialCreditTier.TEAM_SIGNAL
+                    : TrialCreditTier.BASE;
+
+            await repository.save(license);
+
+            return {
+                valid: true,
+                subscriptionStatus: SubscriptionStatus.TRIAL,
+                planType: license.planType,
+                trialEnd: license.trialEnd,
+                ...buildTrialCreditPayload(license),
+                appliedUnlocks,
+            };
+        });
+
+        clearCacheByPrefix("org-license");
+
+        return result;
+    }
+
+    static async consumeTrialReviewCredit(
+        organizationId: string,
+        teamId: string,
+        usageKey?: string,
+    ): Promise<{
+        allowed: boolean;
+        reason?: string;
+        alreadyConsumed?: boolean;
+        trialReviewCreditsTotal?: number;
+        trialReviewCreditsUsed?: number;
+        trialReviewCreditsRemaining?: number;
+        trialCreditTier?: string;
+        trialUnlocks?: TrialUnlock[];
+    }> {
+        const result = await AppDataSource.transaction(async (manager) => {
+            const repository = manager.getRepository(OrganizationLicense);
+            const license = await repository.findOne({
+                where: { organizationId, teamId },
+                lock: { mode: "pessimistic_write" },
+            });
+
+            if (!license) {
+                return {
+                    allowed: false,
+                    reason: "LICENSE_NOT_FOUND",
+                };
+            }
+
+            if (license.subscriptionStatus !== SubscriptionStatus.TRIAL) {
+                return {
+                    allowed: true,
+                    reason: "NOT_TRIAL",
+                };
+            }
+
+            // Legacy trials (created before the credit model) have NULL credits
+            // and keep unlimited reviews — never gate them. (Defense in depth:
+            // the API already skips consume for these, but guard here too so a
+            // direct call can't trip the `remaining <= 0` check on a NULL.)
+            if (license.trialReviewCreditsTotal == null) {
+                return {
+                    allowed: true,
+                    reason: "LEGACY_TRIAL",
+                };
+            }
+
+            const now = new Date();
+            if (license.trialEnd && now > license.trialEnd) {
+                return {
+                    allowed: false,
+                    reason: "TRIAL_EXPIRED",
+                    ...buildTrialCreditPayload(license),
+                };
+            }
+
+            const normalized = normalizeTrialCredits(license);
+
+            if (
+                usageKey &&
+                license.trialReviewCreditUsageKeys.includes(usageKey)
+            ) {
+                if (normalized) {
+                    await repository.save(license);
+                }
+
+                return {
+                    allowed: true,
+                    alreadyConsumed: true,
+                    ...buildTrialCreditPayload(license),
+                };
+            }
+
+            if (license.trialReviewCreditsRemaining <= 0) {
+                if (normalized) {
+                    await repository.save(license);
+                }
+
+                return {
+                    allowed: false,
+                    reason: "TRIAL_REVIEW_CREDITS_EXHAUSTED",
+                    ...buildTrialCreditPayload(license),
+                };
+            }
+
+            license.trialReviewCreditsUsed += 1;
+            license.trialReviewCreditsRemaining -= 1;
+
+            if (usageKey) {
+                license.trialReviewCreditUsageKeys = [
+                    ...license.trialReviewCreditUsageKeys,
+                    usageKey,
+                ];
+            }
+
+            await repository.save(license);
+
+            return {
+                allowed: true,
+                ...buildTrialCreditPayload(license),
+            };
+        });
+
+        clearCacheByPrefix("org-license");
+
+        return result;
     }
 
     static async getAllUsersWithLicense(
         organizationId: string,
-        teamId: string
+        teamId: string,
     ): Promise<{ git_id: string }[]> {
         const licenses = await UserLicenseRepository.find({
             where: {
@@ -499,16 +964,16 @@ export class OrganizationLicenseService {
             try {
                 await this.migrateToFreePlan(
                     trial.organizationId,
-                    trial.teamId
+                    trial.teamId,
                 );
                 migratedCount++;
                 console.log(
-                    `Trial migrado para plano gratuito: orgId=${trial.organizationId}, teamId=${trial.teamId}`
+                    `Trial migrado para plano gratuito: orgId=${trial.organizationId}, teamId=${trial.teamId}`,
                 );
             } catch (error) {
                 console.error(
                     `Erro ao migrar trial para plano gratuito: orgId=${trial.organizationId}, teamId=${trial.teamId}`,
-                    error
+                    error,
                 );
             }
         }
@@ -538,7 +1003,7 @@ export class OrganizationLicenseService {
 
     static async migrateToFreePlan(
         organizationId: string,
-        teamId: string
+        teamId: string,
     ): Promise<OrganizationLicense> {
         const license = await OrganizationLicenseRepository.findOne({
             where: { organizationId, teamId },

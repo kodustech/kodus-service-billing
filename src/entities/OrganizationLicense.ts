@@ -28,6 +28,29 @@ export enum PlanType {
   ENTERPRISE_MANAGED_ANNUAL = "enterprise_managed_annual",
 }
 
+export enum TrialCreditTier {
+  BASE = "base",
+  TEAM_SIGNAL = "team_signal",
+  QUALIFIED = "qualified",
+  MANUAL = "manual",
+}
+
+export enum TrialUnlockStatus {
+  LOCKED = "locked",
+  AVAILABLE = "available",
+  COMPLETED = "completed",
+  CLAIMED = "claimed",
+}
+
+export type TrialUnlock = {
+  key: string;
+  status: TrialUnlockStatus | string;
+  rewardCredits?: number;
+  title?: string;
+  description?: string;
+  completedAt?: string;
+};
+
 @Entity("organization_licenses")
 @Index("IDX_org_licenses_orgid_teamid", ["organizationId", "teamId"])
 @Index("IDX_org_licenses_organizationid", ["organizationId"])
@@ -61,6 +84,27 @@ export class OrganizationLicense {
 
   @Column({ type: "timestamp", nullable: true })
   trialEnd: Date;
+
+  // Nullable on purpose: a NULL total marks a "legacy" trial (created before
+  // the credit model) that must keep unlimited reviews. New trials get these
+  // set explicitly in createTrialLicense.
+  @Column({ type: "integer", nullable: true })
+  trialReviewCreditsTotal: number | null;
+
+  @Column({ type: "integer", nullable: true })
+  trialReviewCreditsUsed: number | null;
+
+  @Column({ type: "integer", nullable: true })
+  trialReviewCreditsRemaining: number | null;
+
+  @Column({ nullable: true })
+  trialCreditTier?: string;
+
+  @Column({ type: "jsonb", default: () => "'[]'::jsonb" })
+  trialUnlocks: TrialUnlock[];
+
+  @Column({ type: "jsonb", default: () => "'[]'::jsonb" })
+  trialReviewCreditUsageKeys: string[];
 
   @Column({ nullable: true })
   stripeCustomerId?: string;

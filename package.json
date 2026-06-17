@@ -9,8 +9,9 @@
         "brace-expansion": "^2.0.2",
         "body-parser": "^2.2.2"
     },
+    "packageManager": "pnpm@10.34.1",
     "scripts": {
-        "build": "yarn tsc --build",
+        "build": "tsc --build",
         "openapi:access:test": "node scripts/openapi/access.test.js",
         "openapi:coverage": "node scripts/openapi/coverage.test.js",
         "openapi:export": "ts-node --transpile-only scripts/openapi/export-openapi.ts",
@@ -22,13 +23,14 @@
         "start": "node ./lib/src/index.js",
         "start:dev": "ts-node-dev --inspect=0.0.0.0:9240 --respawn --transpile-only ./src/index.ts",
         "docker:build": "docker-compose -f docker-compose.yml up --build",
-        "docker:start": "yarn docker:down && yarn docker:up",
+        "docker:start": "pnpm docker:down && pnpm docker:up",
         "docker:up": "docker-compose -f docker-compose.yml up",
         "docker:down": "docker-compose -f docker-compose.yml down",
         "typeorm": "typeorm-ts-node-commonjs",
         "migration:generate": "f() { npx typeorm-ts-node-commonjs migration:generate -p -d src/config/database.ts src/migrations/$@; }; f",
         "migration:run": "npx typeorm-ts-node-commonjs migration:run -d src/config/database.ts",
-        "migration:revert": "npx typeorm-ts-node-commonjs migration:revert -d src/config/database.ts"
+        "migration:revert": "npx typeorm-ts-node-commonjs migration:revert -d src/config/database.ts",
+        "test": "jest"
     },
     "dependencies": {
         "axios": "^1.16.0",
@@ -51,8 +53,11 @@
     "devDependencies": {
         "@types/express": "^5.0.6",
         "@types/node": "^25.7.0",
+        "@types/jest": "^29.5.14",
         "@types/node-cache": "^4.2.5",
         "@redocly/cli": "^2.30.5",
+        "jest": "^29.7.0",
+        "ts-jest": "^29.2.5",
         "@typescript-eslint/eslint-plugin": "^8.59.3",
         "@typescript-eslint/parser": "^8.59.3",
         "eslint": "^10.3.0",
