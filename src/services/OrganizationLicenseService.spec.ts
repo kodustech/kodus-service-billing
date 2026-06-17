@@ -232,4 +232,24 @@ describe("OrganizationLicenseService.recalculateTrialUnlocks", () => {
         expect(lic.trialReviewCreditsTotal).toBeNull();
         expect(txRepo.save).not.toHaveBeenCalled();
     });
+
+    it("reports an expired trial as invalid (not an active trial)", async () => {
+        txRepo.findOne.mockResolvedValue({
+            subscriptionStatus: SubscriptionStatus.TRIAL,
+            planType: "teams_byok",
+            trialEnd: new Date(Date.now() - 86_400_000),
+            trialReviewCreditsTotal: 5,
+            trialReviewCreditsRemaining: 5,
+            trialUnlocks: [],
+            trialReviewCreditUsageKeys: [],
+        });
+
+        const r = await OrganizationLicenseService.recalculateTrialUnlocks(
+            "org",
+            "team",
+            {},
+        );
+
+        expect(r.valid).toBe(false);
+    });
 });

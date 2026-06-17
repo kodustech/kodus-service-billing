@@ -15,9 +15,16 @@ import { buildLogApiUrl } from "../config/utils/urlBuilder";
 import axios from "axios";
 import { AppDataSource } from "../config/database";
 
-const TRIAL_REVIEW_CREDITS_INCLUDED = parseInt(
+const rawTrialReviewCredits = parseInt(
     process.env.TRIAL_REVIEW_CREDITS_INCLUDED || "5",
+    10,
 );
+// Guard against a non-numeric env value: NaN would propagate into
+// trialReviewCreditsTotal (credits never exhaust) and Postgres rejects NaN on
+// the integer column at save time.
+const TRIAL_REVIEW_CREDITS_INCLUDED = Number.isNaN(rawTrialReviewCredits)
+    ? 5
+    : Math.max(0, rawTrialReviewCredits);
 
 const isByokPlan = (planType?: PlanType): boolean =>
     Boolean(planType && planType.includes("byok"));
@@ -645,8 +652,12 @@ export class OrganizationLicenseService {
 
             const now = new Date();
             if (license.trialEnd && now > license.trialEnd) {
+                // Expired trial is no longer an active trial. Mirror the intent
+                // of validateLicense/consume (which migrate/block expired
+                // trials) by reporting invalid so callers don't treat it as
+                // active. Migration to free still happens via validateLicense.
                 return {
-                    valid: true,
+                    valid: false,
                     subscriptionStatus: SubscriptionStatus.TRIAL,
                     planType: license.planType,
                     trialEnd: license.trialEnd,
