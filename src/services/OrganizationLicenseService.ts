@@ -656,6 +656,20 @@ export class OrganizationLicenseService {
 
             normalizeTrialCredits(license);
 
+            // Legacy trial (NULL credits) keeps unlimited reviews — never
+            // assign credits via unlock signals. `null += reward` would coerce
+            // to a number (JS) and silently cap an unlimited trial, so preserve
+            // the NULL marker and return without touching credits or unlocks.
+            if (license.trialReviewCreditsTotal == null) {
+                return {
+                    valid: true,
+                    subscriptionStatus: SubscriptionStatus.TRIAL,
+                    planType: license.planType,
+                    trialEnd: license.trialEnd,
+                    ...buildTrialCreditPayload(license),
+                };
+            }
+
             const appliedUnlocks: string[] = [];
             const unlocks = mergeTrialUnlocks(
                 license.trialUnlocks,

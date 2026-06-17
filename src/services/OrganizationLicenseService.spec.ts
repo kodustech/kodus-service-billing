@@ -200,3 +200,36 @@ describe("OrganizationLicenseService.createTrialLicense", () => {
         expect(Array.isArray(license.trialUnlocks)).toBe(true);
     });
 });
+
+describe("OrganizationLicenseService.recalculateTrialUnlocks", () => {
+    beforeEach(() => txRepo.findOne.mockReset());
+
+    it("leaves a LEGACY trial (null credits) unlimited — unlock signals never coerce null to a number", async () => {
+        const lic = {
+            subscriptionStatus: SubscriptionStatus.TRIAL,
+            planType: "teams_byok",
+            trialEnd: futureTrialEnd(),
+            trialReviewCreditsTotal: null,
+            trialReviewCreditsUsed: null,
+            trialReviewCreditsRemaining: null,
+            trialUnlocks: [],
+            trialReviewCreditUsageKeys: [],
+        };
+        txRepo.findOne.mockResolvedValue(lic);
+
+        const r = await OrganizationLicenseService.recalculateTrialUnlocks(
+            "org",
+            "team",
+            {
+                companyEmailVerified: true,
+                workspaceMembersCount: 5,
+                codeHostMembersCount: 20,
+            },
+        );
+
+        // The legacy NULL marker must survive — no credits assigned, no save.
+        expect(r.trialReviewCreditsTotal ?? null).toBeNull();
+        expect(lic.trialReviewCreditsTotal).toBeNull();
+        expect(txRepo.save).not.toHaveBeenCalled();
+    });
+});
