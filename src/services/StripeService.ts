@@ -4,6 +4,7 @@ import { OrganizationLicenseRepository } from "../repositories/OrganizationLicen
 import { SubscriptionStatus, PlanType } from "../entities/OrganizationLicense";
 import { clearCacheByPrefix } from "../config/utils/cache";
 import { getPlanTypeByPriceId, getPriceIdForPlan } from "../config/planPricing";
+import { KodusNotificationClient } from "./KodusNotificationClient";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "");
 
@@ -136,7 +137,26 @@ export class StripeService {
     clearCacheByPrefix("user-license");
     clearCacheByPrefix("users-license");
 
-    // TODO: Enviar notificação ao cliente
+    // Fire-and-forget customer notification. The client never throws,
+    // but the explicit catch is a second line of defense to guarantee
+    // the rest of the Stripe webhook handler proceeds untouched.
+    KodusNotificationClient.notifyPaymentFailed({
+      organizationId: license.organizationId,
+      teamId: license.teamId,
+      amount: invoice.amount_due ?? 0,
+      currency: invoice.currency ?? "",
+      failureReason:
+        (invoice.last_finalization_error as { message?: string } | undefined)
+          ?.message ?? "Payment failed",
+      nextRetryAt: invoice.next_payment_attempt
+        ? new Date(invoice.next_payment_attempt * 1000).toISOString()
+        : undefined,
+      updatePaymentUrl: process.env.FRONTEND_URL
+        ? `${process.env.FRONTEND_URL}/settings/subscription`
+        : undefined,
+    }).catch(() => {
+      /* unreachable — client swallows internally; defense-in-depth only */
+    });
   }
 
   private static async handleSubscriptionUpdated(

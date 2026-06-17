@@ -58,18 +58,34 @@ export function createApiUrl(options: UrlBuilderOptions): string {
 export function buildLogApiUrl(path: string = ''): string {
   const hostname = process.env.API_BILLING_HOSTNAME_API_ORCHESTRATOR;
   const port = process.env.API_BILLING_PORT_API_ORCHESTRATOR;
-  
+
   if (!hostname || !port) {
     throw new Error(
       'Variáveis de ambiente API_BILLING_HOSTNAME_API_ORCHESTRATOR e API_BILLING_PORT_API_ORCHESTRATOR são obrigatórias'
     );
   }
-  
+
   return createApiUrl({
     hostname,
     port,
     path,
   });
+}
+
+/**
+ * Constrói URL para chamadas à API kodus-ai (mesmo destino que buildLogApiUrl,
+ * com nome mais descritivo para usos não relacionados a logs — webhooks de
+ * notificação, p.ex.).
+ *
+ * Retorna `null` quando as variáveis de ambiente não estão configuradas,
+ * para que callers possam silenciosamente pular a chamada em ambientes que
+ * não habilitam a integração de notificações.
+ */
+export function buildKodusApiUrl(path: string = ''): string | null {
+  const hostname = process.env.API_BILLING_HOSTNAME_API_ORCHESTRATOR;
+  const port = process.env.API_BILLING_PORT_API_ORCHESTRATOR;
+  if (!hostname || !port) return null;
+  return createApiUrl({ hostname, port, path });
 }
 
 /**

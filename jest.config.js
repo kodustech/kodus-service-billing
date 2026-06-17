@@ -5,4 +5,7 @@ module.exports = {
     roots: ["<rootDir>/src"],
     testMatch: ["**/*.spec.ts"],
     clearMocks: true,
+    transform: {
+        "^.+\\.ts$": ["ts-jest", { tsconfig: "tsconfig.spec.json" }],
+    },
 };

@@ -11,7 +11,6 @@
     "sourceMap": true,
     "outDir": "./lib",
     "rootDir": "./",
-    "baseUrl": ".",
     "incremental": true,
     "skipLibCheck": true,
     "strictNullChecks": false,
@@ -30,5 +29,5 @@
   "include": [
     "src",
   ],
-  "exclude": ["node_modules", "lib", "ormlogs.log"],
+  "exclude": ["node_modules", "lib", "ormlogs.log", "src/**/*.spec.ts"],
 }
