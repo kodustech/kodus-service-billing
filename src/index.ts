@@ -1,6 +1,5 @@
 import "reflect-metadata"; // Importante para TypeORM
 import express, { Express } from "express";
-import bodyParser from "body-parser";
 import helmet from "helmet";
 import cors from "cors";
 import { initializeDatabase, AppDataSource } from "./config/database";
@@ -39,8 +38,8 @@ app.use((req, res, next) => {
   }
 });
 
-app.use(bodyParser.urlencoded({ extended: false }));
-app.use(bodyParser.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: false }));
+app.use(express.json({ limit: "10mb" }));
 
 registerApiDocs(app);
 

@@ -336,8 +336,8 @@ export class SubscriptionController {
             }
 
             const url = await StripeService.createCustomerPortalSession(
-                organizationId,
-                teamId,
+                organizationId as string,
+                teamId as string,
             );
 
             return res.json({ url });
