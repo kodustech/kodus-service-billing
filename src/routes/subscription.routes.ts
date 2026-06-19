@@ -3,7 +3,7 @@ import express from "express";
 import { SubscriptionController } from "../controllers/SubscriptionController";
 import { cacheMiddleware } from "../middlewares/cacheMiddleware";
 
-const router = Router();
+const router: Router = Router();
 
 /**
  * @openapi
