@@ -43,6 +43,15 @@ export class KodusNotificationClient {
     await this.post("/billing/webhook/trial-expiring", input);
   }
 
+  static async notifyPlanChanged(input: {
+    organizationId: string;
+    teamId?: string;
+    planType?: string;
+    subscriptionStatus?: string;
+  }): Promise<void> {
+    await this.post("/billing/webhook/plan-changed", input);
+  }
+
   private static async post(
     path: string,
     body: Record<string, unknown>
