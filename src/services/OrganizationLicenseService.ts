@@ -1032,6 +1032,8 @@ export class OrganizationLicenseService {
             teamId: license.teamId,
             planType: license.planType,
             subscriptionStatus: license.subscriptionStatus,
+        }).catch(() => {
+            /* defense-in-depth — client swallows internally */
         });
 
         return license;
