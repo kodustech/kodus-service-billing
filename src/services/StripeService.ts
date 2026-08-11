@@ -116,6 +116,13 @@ export class StripeService {
     clearCacheByPrefix("org-license");
     clearCacheByPrefix("user-license");
     clearCacheByPrefix("users-license");
+
+    KodusNotificationClient.notifyPlanChanged({
+      organizationId: license.organizationId,
+      teamId: license.teamId,
+      planType: license.planType,
+      subscriptionStatus: license.subscriptionStatus,
+    });
   }
 
   private static async handlePaymentFailed(
@@ -195,6 +202,13 @@ export class StripeService {
     clearCacheByPrefix("org-license");
     clearCacheByPrefix("user-license");
     clearCacheByPrefix("users-license");
+
+    KodusNotificationClient.notifyPlanChanged({
+      organizationId: license.organizationId,
+      teamId: license.teamId,
+      planType: license.planType,
+      subscriptionStatus: license.subscriptionStatus,
+    });
   }
 
   private static async handleSubscriptionCanceled(
@@ -213,6 +227,13 @@ export class StripeService {
     clearCacheByPrefix("org-license");
     clearCacheByPrefix("user-license");
     clearCacheByPrefix("users-license");
+
+    KodusNotificationClient.notifyPlanChanged({
+      organizationId: license.organizationId,
+      teamId: license.teamId,
+      planType: license.planType,
+      subscriptionStatus: license.subscriptionStatus,
+    });
 
     // TODO: Expirar licenças de usuários
   }

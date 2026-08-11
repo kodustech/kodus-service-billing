@@ -14,6 +14,7 @@ import { clearCacheByPrefix } from "../config/utils/cache";
 import { buildLogApiUrl } from "../config/utils/urlBuilder";
 import axios from "axios";
 import { AppDataSource } from "../config/database";
+import { KodusNotificationClient } from "./KodusNotificationClient";
 
 const rawTrialReviewCredits = parseInt(
     process.env.TRIAL_REVIEW_CREDITS_INCLUDED || "5",
@@ -1025,6 +1026,15 @@ export class OrganizationLicenseService {
         clearCacheByPrefix("org-license");
         clearCacheByPrefix("user-license");
         clearCacheByPrefix("users-license");
+
+        KodusNotificationClient.notifyPlanChanged({
+            organizationId: license.organizationId,
+            teamId: license.teamId,
+            planType: license.planType,
+            subscriptionStatus: license.subscriptionStatus,
+        }).catch(() => {
+            /* defense-in-depth — client swallows internally */
+        });
 
         return license;
     }
