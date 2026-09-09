@@ -5,6 +5,8 @@ import { SubscriptionStatus, PlanType } from "../entities/OrganizationLicense";
 import { clearCacheByPrefix } from "../config/utils/cache";
 import { getPlanTypeByPriceId, getPriceIdForPlan } from "../config/planPricing";
 import { KodusNotificationClient } from "./KodusNotificationClient";
+import { CreditService } from "./CreditService";
+import { chargeForCredit, CREDITS_MARKUP_PCT } from "../config/creditPricing";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "");
 
@@ -53,6 +55,78 @@ export class StripeService {
     return session.url || "";
   }
 
+  /**
+   * One-time Checkout for a prepaid credit pack ("Kodus as the provider").
+   * The customer pays `creditUsd` plus the markup; the ledger is credited with
+   * `creditUsd` (list-price USD) when `checkout.session.completed` arrives.
+   * Ad-hoc `price_data` so packs need no Stripe Price ids in env; the metadata
+   * `kind` is what the shared webhook handler branches on.
+   */
+  static async createCreditCheckoutSession(
+    organizationId: string,
+    teamId: string,
+    creditUsd: number
+  ): Promise<string> {
+    const license = await OrganizationLicenseRepository.findOne({
+      where: { organizationId, teamId },
+    });
+
+    if (!license) {
+      throw new Error("Organização não encontrada");
+    }
+
+    const chargeUsd = chargeForCredit(creditUsd);
+    const unitAmount = Math.round(chargeUsd * 100);
+    const label = `Kodus credits — $${creditUsd.toFixed(2)}`;
+
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ["card"],
+      mode: "payment",
+      line_items: [
+        {
+          quantity: 1,
+          price_data: {
+            currency: "usd",
+            unit_amount: unitAmount,
+            product_data: {
+              name: label,
+              description: `Prepaid credits for AI models routed by Kodus. Includes a ${CREDITS_MARKUP_PCT}% platform fee.`,
+            },
+          },
+        },
+      ],
+      // Attach to the existing customer so the receipt and the portal line
+      // up with the subscription; otherwise let Checkout create one and the
+      // webhook stores it.
+      ...(license.stripeCustomerId
+        ? { customer: license.stripeCustomerId }
+        : { customer_creation: "always" as const }),
+      success_url: `${process.env.FRONTEND_URL}/settings/subscription?credits=success&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${process.env.FRONTEND_URL}/settings/subscription?credits=cancel`,
+      client_reference_id: organizationId,
+      metadata: {
+        kind: "credit_pack",
+        organizationId,
+        teamId,
+        licenseId: license.id,
+        creditUsd: String(creditUsd),
+        chargeUsd: String(chargeUsd),
+        markupPct: String(CREDITS_MARKUP_PCT),
+      },
+      // Stripe does NOT copy session metadata onto the PaymentIntent.
+      payment_intent_data: {
+        metadata: {
+          kind: "credit_pack",
+          organizationId,
+          teamId,
+          creditUsd: String(creditUsd),
+        },
+      },
+    });
+
+    return session.url || "";
+  }
+
   static async handleWebhookEvent(event: Stripe.Event): Promise<void> {
     switch (event.type) {
       case "checkout.session.completed":
@@ -89,6 +163,14 @@ export class StripeService {
 
     const organizationId = session.metadata.organizationId;
 
+    // A credit-pack purchase is NOT a subscription: it must never touch
+    // planType / totalLicenses / stripeSubscriptionId. Branch before any of
+    // that. Idempotent on the session id — Stripe redelivers.
+    if (session.metadata.kind === "credit_pack") {
+      await this.handleCreditPackPaid(session, organizationId);
+      return;
+    }
+
     // Atualizar a licença com os dados do Stripe
     const license = await OrganizationLicenseRepository.findOne({
       where: { organizationId },
@@ -123,6 +205,58 @@ export class StripeService {
       planType: license.planType,
       subscriptionStatus: license.subscriptionStatus,
     });
+  }
+
+  private static async handleCreditPackPaid(
+    session: Stripe.Checkout.Session,
+    organizationId: string
+  ): Promise<void> {
+    if (session.payment_status !== "paid") {
+      console.log(
+        `Credit pack session ${session.id} not paid yet (${session.payment_status}); skipping`
+      );
+      return;
+    }
+
+    const creditUsd = Number(session.metadata?.creditUsd);
+    if (!Number.isFinite(creditUsd) || creditUsd <= 0) {
+      console.error(
+        `Credit pack session ${session.id} carries no valid creditUsd metadata`
+      );
+      return;
+    }
+
+    const teamId = session.metadata?.teamId || undefined;
+
+    // Capture the customer for orgs that never had a subscription, so the
+    // portal/receipts work for credit-only customers too.
+    const license = await OrganizationLicenseRepository.findOne({
+      where: teamId ? { organizationId, teamId } : { organizationId },
+    });
+    if (license && !license.stripeCustomerId && session.customer) {
+      license.stripeCustomerId = session.customer as string;
+      await OrganizationLicenseRepository.save(license);
+    }
+
+    await CreditService.applyPurchase({
+      organizationId,
+      teamId,
+      creditUsd,
+      usageKey: `stripe:checkout:${session.id}`,
+      metadata: {
+        stripeSessionId: session.id,
+        stripePaymentIntentId:
+          typeof session.payment_intent === "string"
+            ? session.payment_intent
+            : session.payment_intent?.id,
+        chargeUsd: Number(session.metadata?.chargeUsd),
+        markupPct: Number(session.metadata?.markupPct),
+        amountTotalCents: session.amount_total,
+        currency: session.currency,
+      },
+    });
+
+    clearCacheByPrefix("org-license");
   }
 
   private static async handlePaymentFailed(

@@ -7,6 +7,8 @@ import {
   Index,
 } from "typeorm";
 
+import { numericTransformer } from "./CreditLedgerEntry";
+
 export enum SubscriptionStatus {
   TRIAL = "trial",
   ACTIVE = "active",
@@ -105,6 +107,28 @@ export class OrganizationLicense {
 
   @Column({ type: "jsonb", default: () => "'[]'::jsonb" })
   trialReviewCreditUsageKeys: string[];
+
+  // Prepaid credits ("Kodus as the provider"). The balance is denormalized
+  // from credit_ledger_entries and only ever changes inside the same
+  // transaction that appends a ledger row, under a row lock. May go negative:
+  // usage is metered after the fact, so a running review can overshoot; the
+  // gate on the API side blocks the NEXT review, not the one in flight.
+  @Column({
+    type: "numeric",
+    precision: 14,
+    scale: 6,
+    default: 0,
+    transformer: numericTransformer,
+  })
+  creditBalanceUsd: number;
+
+  // One notification per crossing: set when the low-balance / exhausted
+  // webhook fires, cleared by the next purchase that lifts the balance back.
+  @Column({ type: "timestamp", nullable: true })
+  creditsLowNotifiedAt: Date | null;
+
+  @Column({ type: "timestamp", nullable: true })
+  creditsExhaustedNotifiedAt: Date | null;
 
   @Column({ nullable: true })
   stripeCustomerId?: string;

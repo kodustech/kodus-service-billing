@@ -5,6 +5,7 @@ import { PlanType } from "../entities/OrganizationLicense";
 import Stripe from "stripe";
 import validateAdminToken from "../config/utils/adminToken";
 import { PlanCatalogService } from "../services/PlanCatalogService";
+import { CreditService } from "../services/CreditService";
 
 export class SubscriptionController {
     static async createTrial(req: Request, res: Response): Promise<Response> {
@@ -422,6 +423,146 @@ export class SubscriptionController {
                         ? error.message
                         : "Erro ao migrar para plano gratuito",
             });
+        }
+    }
+
+    // ── Prepaid credits ("Kodus as the provider") ──────────────────────
+
+    static async getCreditBalance(
+        req: Request,
+        res: Response,
+    ): Promise<Response> {
+        try {
+            const { organizationId, teamId } = req.query;
+
+            if (!organizationId) {
+                return res.status(400).json({
+                    error: "ID da organização é obrigatório",
+                });
+            }
+
+            const balance = await CreditService.getBalance(
+                organizationId as string,
+                (teamId as string) || undefined,
+            );
+
+            if (!balance) {
+                return res.status(404).json({ error: "Licença não encontrada" });
+            }
+
+            return res.json(balance);
+        } catch (error) {
+            console.error("Erro ao consultar saldo de créditos:", error);
+            return res
+                .status(500)
+                .json({ error: "Erro ao consultar saldo de créditos" });
+        }
+    }
+
+    static async listCreditLedger(
+        req: Request,
+        res: Response,
+    ): Promise<Response> {
+        try {
+            const { organizationId, limit, before, types } = req.query;
+
+            if (!organizationId) {
+                return res.status(400).json({
+                    error: "ID da organização é obrigatório",
+                });
+            }
+
+            const beforeDate = before ? new Date(String(before)) : undefined;
+            if (beforeDate && Number.isNaN(beforeDate.getTime())) {
+                return res.status(400).json({ error: "before inválido" });
+            }
+
+            const entries = await CreditService.listLedger(
+                organizationId as string,
+                {
+                    limit: limit ? Number(limit) : undefined,
+                    before: beforeDate,
+                    types: types ? String(types).split(",") : undefined,
+                },
+            );
+
+            return res.json({ entries });
+        } catch (error) {
+            console.error("Erro ao listar ledger de créditos:", error);
+            return res
+                .status(500)
+                .json({ error: "Erro ao listar ledger de créditos" });
+        }
+    }
+
+    static async createCreditCheckout(
+        req: Request,
+        res: Response,
+    ): Promise<Response> {
+        try {
+            const { organizationId, teamId, creditUsd } = req.body;
+
+            if (!organizationId || !teamId) {
+                return res.status(400).json({
+                    error: "ID da organização e teamId são obrigatórios",
+                });
+            }
+
+            const amount = CreditService.validatePurchaseAmount(creditUsd);
+            if (amount === null) {
+                return res.status(400).json({
+                    error: "creditUsd inválido: use um pacote listado ou um valor dentro dos limites",
+                });
+            }
+
+            const url = await StripeService.createCreditCheckoutSession(
+                organizationId,
+                teamId,
+                amount,
+            );
+
+            return res.json({ url, ...CreditService.quote(amount) });
+        } catch (error) {
+            console.error("Erro ao criar checkout de créditos:", error);
+            return res
+                .status(500)
+                .json({ error: "Erro ao criar checkout de créditos" });
+        }
+    }
+
+    static async debitCredits(req: Request, res: Response): Promise<Response> {
+        try {
+            const { organizationId, teamId, entries } = req.body;
+
+            if (!organizationId) {
+                return res.status(400).json({
+                    error: "ID da organização é obrigatório",
+                });
+            }
+            if (!Array.isArray(entries) || entries.length === 0) {
+                return res.status(400).json({
+                    error: "entries deve ser uma lista não vazia",
+                });
+            }
+            if (entries.length > 500) {
+                return res.status(400).json({
+                    error: "entries: máximo de 500 itens por chamada",
+                });
+            }
+
+            const result = await CreditService.debit({
+                organizationId,
+                teamId: teamId || undefined,
+                entries,
+            });
+
+            return res.json(result);
+        } catch (error) {
+            if ((error as Error)?.message === "LICENSE_NOT_FOUND") {
+                return res.status(404).json({ error: "Licença não encontrada" });
+            }
+            console.error("Erro ao debitar créditos:", error);
+            return res.status(500).json({ error: "Erro ao debitar créditos" });
         }
     }
 }

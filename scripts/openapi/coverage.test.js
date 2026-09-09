@@ -19,6 +19,10 @@ const expected = [
   ["get", "/api/billing/portal/{organizationId}/{teamId}"],
   ["post", "/api/billing/update-trial"],
   ["post", "/api/billing/migrate-to-free"],
+  ["get", "/api/billing/credits/balance"],
+  ["get", "/api/billing/credits/ledger"],
+  ["post", "/api/billing/credits/checkout"],
+  ["post", "/api/billing/credits/debit"],
 ];
 
 for (const [method, path] of expected) {
