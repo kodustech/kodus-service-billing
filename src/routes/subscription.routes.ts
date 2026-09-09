@@ -988,4 +988,67 @@ router.post("/credits/debit", async (req, res) => {
   await SubscriptionController.debitCredits(req, res);
 });
 
+/**
+ * @openapi
+ * /api/billing/credits/adjust:
+ *   post:
+ *     tags: [Billing]
+ *     summary: Manually adjust prepaid credits (admin)
+ *     description: Signed adjustment by Kodus (goodwill, correction). Requires the admin token in the body. Idempotent on `usageKey`.
+ *     operationId: adjustCredits
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: "#/components/schemas/CreditAdjustRequestDto"
+ *           example:
+ *             organizationId: org_123
+ *             teamId: team_456
+ *             amountUsd: 25
+ *             usageKey: adjust:goodwill-2026-09
+ *             reason: Goodwill after outage
+ *             adminToken: "***"
+ *     responses:
+ *       "200":
+ *         description: Adjustment outcome and the resulting balance.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/CreditAdjustResponseDto"
+ *       "400":
+ *         description: Invalid request payload.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "401":
+ *         description: Unauthorized.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "403":
+ *         description: Invalid admin token.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "404":
+ *         description: License not found.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "500":
+ *         description: Internal server error.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ */
+router.post("/credits/adjust", async (req, res) => {
+  await SubscriptionController.adjustCredits(req, res);
+});
+
 export default router;

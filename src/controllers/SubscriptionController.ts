@@ -530,6 +530,49 @@ export class SubscriptionController {
         }
     }
 
+    /** Admin-only (adminToken in the body, like /update-trial). */
+    static async adjustCredits(
+        req: Request,
+        res: Response,
+    ): Promise<Response> {
+        try {
+            const { organizationId, teamId, amountUsd, usageKey, reason, adminToken } =
+                req.body;
+
+            if (!validateAdminToken(adminToken)) {
+                return res.status(403).json({ error: "adminToken inválido" });
+            }
+            if (!organizationId || !usageKey || !reason) {
+                return res.status(400).json({
+                    error: "organizationId, usageKey e reason são obrigatórios",
+                });
+            }
+            const amount = Number(amountUsd);
+            if (!Number.isFinite(amount) || amount === 0) {
+                return res.status(400).json({
+                    error: "amountUsd deve ser um número diferente de zero",
+                });
+            }
+
+            const result = await CreditService.adjust({
+                organizationId,
+                teamId: teamId || undefined,
+                amountUsd: amount,
+                usageKey,
+                reason,
+                actor: "admin",
+            });
+
+            return res.json(result);
+        } catch (error) {
+            if ((error as Error)?.message === "LICENSE_NOT_FOUND") {
+                return res.status(404).json({ error: "Licença não encontrada" });
+            }
+            console.error("Erro ao ajustar créditos:", error);
+            return res.status(500).json({ error: "Erro ao ajustar créditos" });
+        }
+    }
+
     static async debitCredits(req: Request, res: Response): Promise<Response> {
         try {
             const { organizationId, teamId, entries } = req.body;

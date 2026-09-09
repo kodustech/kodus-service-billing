@@ -336,3 +336,47 @@ describe("decideNotification", () => {
         ).toBeNull();
     });
 });
+
+describe("adjust (admin)", () => {
+    it("applies a signed adjustment, idempotent on usageKey, and re-arms notifications", async () => {
+        const lic = license({
+            creditBalanceUsd: -1,
+            creditsLowNotifiedAt: new Date(),
+            creditsExhaustedNotifiedAt: new Date(),
+        });
+        licenseRepo.findOne.mockResolvedValue(lic);
+
+        const first = await CreditService.adjust({
+            organizationId: "org-1",
+            amountUsd: 26,
+            usageKey: "adjust:seed",
+            reason: "seed",
+        });
+        expect(first).toEqual({ applied: true, balanceUsd: 25 });
+        expect(inserted[0]).toMatchObject({ type: "adjustment", amountUsd: 26 });
+        expect(lic.creditsLowNotifiedAt).toBeNull();
+        expect(lic.creditsExhaustedNotifiedAt).toBeNull();
+
+        const again = await CreditService.adjust({
+            organizationId: "org-1",
+            amountUsd: 26,
+            usageKey: "adjust:seed",
+            reason: "seed",
+        });
+        expect(again).toEqual({ applied: false, balanceUsd: 25 });
+
+        const down = await CreditService.adjust({
+            organizationId: "org-1",
+            amountUsd: -25,
+            usageKey: "adjust:zero",
+            reason: "test exhaustion",
+        });
+        expect(down.balanceUsd).toBe(0);
+    });
+
+    it("rejects a zero or non-numeric amount", async () => {
+        await expect(
+            CreditService.adjust({ organizationId: "o", amountUsd: 0, usageKey: "x", reason: "r" }),
+        ).rejects.toThrow(/non-zero/);
+    });
+});

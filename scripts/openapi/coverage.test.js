@@ -23,6 +23,7 @@ const expected = [
   ["get", "/api/billing/credits/ledger"],
   ["post", "/api/billing/credits/checkout"],
   ["post", "/api/billing/credits/debit"],
+  ["post", "/api/billing/credits/adjust"],
 ];
 
 for (const [method, path] of expected) {

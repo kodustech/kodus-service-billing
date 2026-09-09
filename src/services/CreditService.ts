@@ -346,6 +346,80 @@ export class CreditService {
         };
     }
 
+    /**
+     * Manual, signed adjustment by Kodus (goodwill, correction, a seeded test
+     * balance). Same transaction shape as a purchase; idempotent on
+     * `usageKey` so a retried admin call cannot double-apply. Re-arms the
+     * one-shot notifications like a purchase does when the balance recovers.
+     */
+    static async adjust(input: {
+        organizationId: string;
+        teamId?: string;
+        amountUsd: number;
+        usageKey: string;
+        reason: string;
+        actor?: string;
+    }): Promise<{ applied: boolean; balanceUsd: number }> {
+        const amount = roundUsd(Number(input.amountUsd));
+        if (!Number.isFinite(amount) || amount === 0) {
+            throw new Error("amountUsd must be a non-zero number");
+        }
+
+        const outcome = await AppDataSource.transaction(async (manager) => {
+            const licenses = manager.getRepository(OrganizationLicense);
+            const ledger = manager.getRepository(CreditLedgerEntry);
+
+            const license = await licenses.findOne({
+                where: input.teamId
+                    ? {
+                          organizationId: input.organizationId,
+                          teamId: input.teamId,
+                      }
+                    : { organizationId: input.organizationId },
+                lock: { mode: "pessimistic_write" },
+            });
+            if (!license) {
+                throw new Error("LICENSE_NOT_FOUND");
+            }
+
+            const balanceAfter = roundUsd(
+                (license.creditBalanceUsd ?? 0) + amount,
+            );
+            try {
+                await ledger.insert({
+                    organizationId: input.organizationId,
+                    teamId: input.teamId ?? license.teamId,
+                    type: CreditLedgerEntryType.ADJUSTMENT,
+                    amountUsd: amount,
+                    balanceAfterUsd: balanceAfter,
+                    usageKey: input.usageKey,
+                    metadata: { reason: input.reason, actor: input.actor },
+                });
+            } catch (error) {
+                if (isUniqueViolation(error)) {
+                    return {
+                        applied: false,
+                        balanceUsd: roundUsd(license.creditBalanceUsd ?? 0),
+                    };
+                }
+                throw error;
+            }
+
+            license.creditBalanceUsd = balanceAfter;
+            if (balanceAfter > CREDITS_LOW_THRESHOLD_USD) {
+                license.creditsLowNotifiedAt = null;
+            }
+            if (balanceAfter > 0) {
+                license.creditsExhaustedNotifiedAt = null;
+            }
+            await licenses.save(license);
+            return { applied: true, balanceUsd: balanceAfter };
+        });
+
+        clearCacheByPrefix("org-license");
+        return outcome;
+    }
+
     /** The Stripe charge (USD) for a credit amount — surfaced to the UI. */
     static quote(creditUsd: number): {
         creditUsd: number;

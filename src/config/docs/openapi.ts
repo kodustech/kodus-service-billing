@@ -451,6 +451,30 @@ export function buildOpenApiSpec() {
             },
           },
         },
+        CreditAdjustRequestDto: {
+          type: "object",
+          required: ["organizationId", "amountUsd", "usageKey", "reason", "adminToken"],
+          properties: {
+            organizationId: { type: "string", example: "org_123" },
+            teamId: { type: "string", example: "team_456" },
+            amountUsd: {
+              type: "number",
+              description: "Signed USD; positive credits, negative debits.",
+              example: 25,
+            },
+            usageKey: { type: "string", example: "adjust:goodwill-2026-09" },
+            reason: { type: "string", example: "Goodwill after outage" },
+            adminToken: { type: "string" },
+          },
+        },
+        CreditAdjustResponseDto: {
+          type: "object",
+          required: ["applied", "balanceUsd"],
+          properties: {
+            applied: { type: "boolean", example: true },
+            balanceUsd: { type: "number", example: 67.5 },
+          },
+        },
         CreditDebitResponseDto: {
           type: "object",
           required: [
