@@ -101,8 +101,8 @@ export class StripeService {
       ...(license.stripeCustomerId
         ? { customer: license.stripeCustomerId }
         : { customer_creation: "always" as const }),
-      success_url: `${process.env.FRONTEND_URL}/byok?tab=credits&credits=success&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.FRONTEND_URL}/byok?tab=credits&credits=cancel`,
+      success_url: `${process.env.FRONTEND_URL}/byok?credits=success&session_id={CHECKOUT_SESSION_ID}#kodus`,
+      cancel_url: `${process.env.FRONTEND_URL}/byok?credits=cancel#kodus`,
       client_reference_id: organizationId,
       metadata: {
         kind: "credit_pack",
