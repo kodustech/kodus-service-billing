@@ -465,7 +465,7 @@ export class SubscriptionController {
         res: Response,
     ): Promise<Response> {
         try {
-            const { organizationId, limit, before, types } = req.query;
+            const { organizationId, limit, before, beforeId, types } = req.query;
 
             if (!organizationId) {
                 return res.status(400).json({
@@ -483,6 +483,7 @@ export class SubscriptionController {
                 {
                     limit: limit ? Number(limit) : undefined,
                     before: beforeDate,
+                    beforeId: beforeId ? String(beforeId) : undefined,
                     types: types ? String(types).split(",") : undefined,
                 },
             );
@@ -513,10 +514,15 @@ export class SubscriptionController {
                 teamId ? String(teamId) : undefined,
                 {
                     enabled: enabled === true,
+                    // JSON null means "leave it": Number(null) would be 0.
                     thresholdUsd:
-                        thresholdUsd === undefined ? undefined : Number(thresholdUsd),
+                        thresholdUsd === undefined || thresholdUsd === null
+                            ? undefined
+                            : Number(thresholdUsd),
                     amountUsd:
-                        amountUsd === undefined ? undefined : Number(amountUsd),
+                        amountUsd === undefined || amountUsd === null
+                            ? undefined
+                            : Number(amountUsd),
                 },
             );
             if (result.ok === true) {

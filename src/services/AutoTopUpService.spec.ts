@@ -199,6 +199,7 @@ describe("charge — the off-session purchase", () => {
                 paymentMethodId: "pm_123",
                 creditUsd: 50,
                 chargeUsd: 53.5, // 7% markup
+                idempotencyKey: expect.stringMatching(/^auto-topup:lic-1:\d+$/),
             }),
         );
         expect(CreditService.applyPurchase).toHaveBeenCalledWith(
@@ -268,5 +269,31 @@ describe("detachPaymentMethod", () => {
         expect(state?.paymentMethod).toBeNull();
         expect(lic.creditPaymentMethodId).toBeNull();
         expect(StripeService.detachPaymentMethod).toHaveBeenCalledWith("pm_123");
+    });
+});
+
+describe("charge — idempotency across retries", () => {
+    it("keys the PaymentIntent on the claimed attempt so a retry cannot charge twice", async () => {
+        const attempt = new Date("2026-09-10T12:00:00Z");
+        licenseRepo.findOne.mockResolvedValue(license({ creditAutoTopUpLastAt: attempt }));
+        (StripeService.chargeSavedPaymentMethod as jest.Mock).mockResolvedValue({
+            id: "pi_same",
+            status: "succeeded",
+        });
+        (CreditService.applyPurchase as jest.Mock).mockResolvedValue({ applied: true, balanceUsd: 53 });
+        await AutoTopUpService.charge("lic-1");
+        await AutoTopUpService.charge("lic-1");
+        const keys = (StripeService.chargeSavedPaymentMethod as jest.Mock).mock.calls.map(
+            (c) => c[0].idempotencyKey,
+        );
+        expect(keys).toEqual([
+            `auto-topup:lic-1:${attempt.getTime()}`,
+            `auto-topup:lic-1:${attempt.getTime()}`,
+        ]);
+        // The ledger side is idempotent on the PaymentIntent id as well.
+        expect(CreditService.applyPurchase).toHaveBeenNthCalledWith(
+            2,
+            expect.objectContaining({ usageKey: "stripe:pi:pi_same" }),
+        );
     });
 });

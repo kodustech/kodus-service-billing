@@ -209,9 +209,13 @@ export class StripeService {
     paymentMethodId: string;
     chargeUsd: number;
     creditUsd: number;
+    /** One key per claimed attempt: a retry after a timeout returns the SAME
+     *  PaymentIntent instead of charging the card again. */
+    idempotencyKey: string;
   }): Promise<Stripe.PaymentIntent> {
     const customer = await this.ensureCustomer(input.license);
-    return stripe.paymentIntents.create({
+    return stripe.paymentIntents.create(
+      {
       amount: Math.round(input.chargeUsd * 100),
       currency: "usd",
       customer,
@@ -227,7 +231,9 @@ export class StripeService {
         chargeUsd: String(input.chargeUsd),
         markupPct: String(CREDITS_MARKUP_PCT),
       },
-    });
+      },
+      { idempotencyKey: input.idempotencyKey }
+    );
   }
 
   static async handleWebhookEvent(event: Stripe.Event): Promise<void> {

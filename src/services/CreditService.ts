@@ -1,4 +1,4 @@
-import { LessThan, QueryFailedError } from "typeorm";
+import { Brackets, In, LessThan, QueryFailedError } from "typeorm";
 
 import { AppDataSource } from "../config/database";
 import { clearCacheByPrefix } from "../config/utils/cache";
@@ -98,11 +98,17 @@ export class CreditService {
         });
         if (!license) return null;
 
-        const totals = await CreditLedgerRepository.createQueryBuilder("e")
+        // Totals scoped like the balance row: the org's ledger, narrowed to
+        // the team when the caller asked for a team's license.
+        const totalsQb = CreditLedgerRepository.createQueryBuilder("e")
             .select("e.type", "type")
             .addSelect("COALESCE(SUM(e.amountUsd), 0)", "sum")
             .addSelect("MAX(e.createdAt)", "last")
-            .where("e.organizationId = :organizationId", { organizationId })
+            .where("e.organizationId = :organizationId", { organizationId });
+        if (teamId) {
+            totalsQb.andWhere("e.teamId = :teamId", { teamId });
+        }
+        const totals = await totalsQb
             .groupBy("e.type")
             .getRawMany<{ type: string; sum: string; last: Date | null }>();
 
@@ -132,21 +138,50 @@ export class CreditService {
         };
     }
 
+    /**
+     * Newest first. `types` is pushed into the query (a filtered page is a
+     * full page, not "the matching rows among the newest N"). The cursor is
+     * `(createdAt, id)`: every row of one debit batch shares `createdAt`
+     * (transaction-stable `now()`), so a date-only cursor would drop the rest
+     * of a batch once a page ends inside it. Pass the last row's `createdAt`
+     * AND `id` as `before` / `beforeId` to continue.
+     */
     static async listLedger(
         organizationId: string,
-        options: { limit?: number; before?: Date; types?: string[] } = {},
+        options: {
+            limit?: number;
+            before?: Date;
+            beforeId?: string;
+            types?: string[];
+        } = {},
     ): Promise<CreditLedgerEntry[]> {
         const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
-        const where: Record<string, unknown> = { organizationId };
-        if (options.before) where.createdAt = LessThan(options.before);
-        const entries = await CreditLedgerRepository.find({
-            where,
-            order: { createdAt: "DESC" },
-            take: limit,
-        });
-        return options.types?.length
-            ? entries.filter((e) => options.types!.includes(e.type))
-            : entries;
+        const validTypes = (options.types ?? []).filter((t) =>
+            (Object.values(CreditLedgerEntryType) as string[]).includes(t),
+        );
+        const qb = CreditLedgerRepository.createQueryBuilder("e")
+            .where("e.organizationId = :organizationId", { organizationId })
+            .orderBy("e.createdAt", "DESC")
+            .addOrderBy("e.id", "DESC")
+            .take(limit);
+        if (validTypes.length > 0) {
+            qb.andWhere({ type: In(validTypes) });
+        }
+        if (options.before && options.beforeId) {
+            qb.andWhere(
+                new Brackets((w) => {
+                    w.where("e.createdAt < :before", {
+                        before: options.before,
+                    }).orWhere(
+                        "e.createdAt = :before AND e.id < :beforeId",
+                        { before: options.before, beforeId: options.beforeId },
+                    );
+                }),
+            );
+        } else if (options.before) {
+            qb.andWhere({ createdAt: LessThan(options.before) });
+        }
+        return qb.getMany();
     }
 
     /**

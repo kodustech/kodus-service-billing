@@ -203,12 +203,21 @@ export class AutoTopUpService {
 
         const creditUsd = roundUsd(amount);
         const chargeUsd = chargeForCredit(creditUsd);
+        // The debit that claimed this attempt stamped `creditAutoTopUpLastAt`
+        // under the row lock; keyed on it, a retry of the same attempt (a
+        // Stripe timeout after the charge went through) gets the same
+        // PaymentIntent back — never a second charge.
+        const attemptAt = license.creditAutoTopUpLastAt
+            ? new Date(license.creditAutoTopUpLastAt).getTime()
+            : Date.now();
+        const idempotencyKey = `auto-topup:${license.id}:${attemptAt}`;
         try {
             const intent = await StripeService.chargeSavedPaymentMethod({
                 license,
                 paymentMethodId: pm,
                 chargeUsd,
                 creditUsd,
+                idempotencyKey,
             });
             if (intent.status !== "succeeded") {
                 throw new Error(`payment_intent ${intent.id} is ${intent.status}`);
