@@ -19,6 +19,11 @@ import { OrganizationLicense } from "../entities/OrganizationLicense";
 import { CreditLedgerRepository } from "../repositories/CreditLedgerRepository";
 import { OrganizationLicenseRepository } from "../repositories/OrganizationLicenseRepository";
 import { KodusNotificationClient } from "./KodusNotificationClient";
+import {
+    AutoTopUpService,
+    decideAutoTopUp,
+    type AutoTopUpState,
+} from "./AutoTopUpService";
 
 /** Postgres unique-violation SQLSTATE — the ledger's idempotency signal. */
 const UNIQUE_VIOLATION = "23505";
@@ -50,6 +55,7 @@ export type CreditBalance = {
     lifetimePurchasedUsd: number;
     lifetimeDebitedUsd: number;
     lastPurchaseAt: string | null;
+    autoTopUp: AutoTopUpState;
 };
 
 type NotifyDecision = {
@@ -122,6 +128,7 @@ export class CreditService {
             lastPurchaseAt: lastPurchase
                 ? new Date(lastPurchase).toISOString()
                 : null,
+            autoTopUp: AutoTopUpService.stateOf(license),
         };
     }
 
@@ -304,9 +311,16 @@ export class CreditService {
             }
 
             const decision = decideNotification(license, balance);
-            if (applied > 0 || decision.send) {
+            const now = new Date();
+            // Claim the auto top-up attempt under the row lock: the debit
+            // that flips `creditAutoTopUpLastAt` is the only one that charges,
+            // so two concurrent sweeps can never double-charge one dip.
+            const autoTopUp = decideAutoTopUp(license, balance, now);
+            if (autoTopUp) {
+                license.creditAutoTopUpLastAt = now;
+            }
+            if (applied > 0 || decision.send || autoTopUp) {
                 license.creditBalanceUsd = balance;
-                const now = new Date();
                 if (decision.send === "low") {
                     license.creditsLowNotifiedAt = now;
                 } else if (decision.send === "exhausted") {
@@ -317,8 +331,24 @@ export class CreditService {
                 await licenses.save(license);
             }
 
-            return { license, balance, applied, skipped, appliedUsd, decision };
+            return {
+                license,
+                balance,
+                applied,
+                skipped,
+                appliedUsd,
+                decision,
+                autoTopUp,
+            };
         });
+
+        if (outcome.autoTopUp) {
+            // Outside the transaction: a Stripe round-trip must not hold the
+            // license row lock. Failures are recorded on the license.
+            AutoTopUpService.charge(outcome.license.id).catch((err) =>
+                console.error("Auto top-up crashed", err),
+            );
+        }
 
         if (outcome.applied > 0) {
             clearCacheByPrefix("org-license");

@@ -924,6 +924,141 @@ router.post("/credits/checkout", async (req, res) => {
 
 /**
  * @openapi
+ * /api/billing/credits/auto-topup:
+ *   post:
+ *     tags: [Billing]
+ *     summary: Configure automatic top-up of prepaid credits
+ *     description: When enabled, a debit that leaves the balance at or below `thresholdUsd` charges the saved card for `amountUsd` of credit (plus the platform fee). Enabling requires a saved card (409 otherwise).
+ *     operationId: updateCreditAutoTopUp
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: "#/components/schemas/CreditAutoTopUpRequestDto"
+ *     responses:
+ *       "200":
+ *         description: The saved settings.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/CreditAutoTopUpDto"
+ *       "400":
+ *         description: Invalid amount or threshold.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "404":
+ *         description: License not found.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "409":
+ *         description: No saved card (NO_PAYMENT_METHOD).
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "500":
+ *         description: Internal server error.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ */
+router.post("/credits/auto-topup", async (req, res) => {
+  await SubscriptionController.updateAutoTopUp(req, res);
+});
+
+/**
+ * @openapi
+ * /api/billing/credits/payment-method/checkout:
+ *   post:
+ *     tags: [Billing]
+ *     summary: Start a Stripe Checkout (setup mode) to save a card for auto top-up
+ *     operationId: createCreditPaymentMethodCheckout
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [organizationId, teamId]
+ *             properties:
+ *               organizationId: { type: string }
+ *               teamId: { type: string }
+ *     responses:
+ *       "200":
+ *         description: Hosted Checkout URL.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 url: { type: string }
+ *       "400":
+ *         description: Missing ids.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "500":
+ *         description: Internal server error.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ */
+router.post("/credits/payment-method/checkout", async (req, res) => {
+  await SubscriptionController.createCreditPaymentMethodCheckout(req, res);
+});
+
+/**
+ * @openapi
+ * /api/billing/credits/payment-method:
+ *   delete:
+ *     tags: [Billing]
+ *     summary: Forget the saved card (turns auto top-up off)
+ *     operationId: removeCreditPaymentMethod
+ *     parameters:
+ *       - in: query
+ *         name: organizationId
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: teamId
+ *         required: false
+ *         schema:
+ *           type: string
+ *     responses:
+ *       "200":
+ *         description: The resulting auto top-up state.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/CreditAutoTopUpDto"
+ *       "404":
+ *         description: License not found.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "500":
+ *         description: Internal server error.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ */
+router.delete("/credits/payment-method", async (req, res) => {
+  await SubscriptionController.removeCreditPaymentMethod(req, res);
+});
+
+/**
+ * @openapi
  * /api/billing/credits/debit:
  *   post:
  *     tags: [Billing]

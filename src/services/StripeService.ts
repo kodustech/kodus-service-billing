@@ -6,7 +6,9 @@ import { clearCacheByPrefix } from "../config/utils/cache";
 import { getPlanTypeByPriceId, getPriceIdForPlan } from "../config/planPricing";
 import { KodusNotificationClient } from "./KodusNotificationClient";
 import { CreditService } from "./CreditService";
+import { AutoTopUpService } from "./AutoTopUpService";
 import { chargeForCredit, CREDITS_MARKUP_PCT } from "../config/creditPricing";
+import { OrganizationLicense } from "../entities/OrganizationLicense";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "");
 
@@ -115,6 +117,9 @@ export class StripeService {
       },
       // Stripe does NOT copy session metadata onto the PaymentIntent.
       payment_intent_data: {
+        // Keep the card so auto top-up can charge it later without the
+        // customer in the loop; the webhook records the payment method.
+        setup_future_usage: "off_session",
         metadata: {
           kind: "credit_pack",
           organizationId,
@@ -125,6 +130,104 @@ export class StripeService {
     });
 
     return session.url || "";
+  }
+
+  /**
+   * Checkout in `setup` mode: saves a card for auto top-up without charging
+   * it. Used when the org wants auto top-up before (or without) a first
+   * pack purchase, or to replace the card on file.
+   */
+  static async createCreditSetupSession(
+    organizationId: string,
+    teamId: string
+  ): Promise<string> {
+    const license = await OrganizationLicenseRepository.findOne({
+      where: { organizationId, teamId },
+    });
+    if (!license) {
+      throw new Error("Organização não encontrada");
+    }
+    const customer = await this.ensureCustomer(license);
+    const session = await stripe.checkout.sessions.create({
+      mode: "setup",
+      payment_method_types: ["card"],
+      customer,
+      success_url: `${process.env.FRONTEND_URL}/byok?credits=card_saved#kodus`,
+      cancel_url: `${process.env.FRONTEND_URL}/byok?credits=cancel#kodus`,
+      client_reference_id: organizationId,
+      metadata: {
+        kind: "credit_payment_method",
+        organizationId,
+        teamId,
+        licenseId: license.id,
+      },
+    });
+    return session.url || "";
+  }
+
+  /** The org's Stripe customer, created on demand for credit-only orgs. */
+  private static async ensureCustomer(
+    license: OrganizationLicense
+  ): Promise<string> {
+    if (license.stripeCustomerId) return license.stripeCustomerId;
+    const customer = await stripe.customers.create({
+      metadata: {
+        organizationId: license.organizationId,
+        teamId: license.teamId,
+      },
+    });
+    license.stripeCustomerId = customer.id;
+    await OrganizationLicenseRepository.save(license);
+    clearCacheByPrefix("org-license");
+    return customer.id;
+  }
+
+  /** "Visa •••• 4242" for the UI; null when Stripe has no card details. */
+  static async describePaymentMethod(
+    paymentMethodId: string
+  ): Promise<string | null> {
+    const pm = await stripe.paymentMethods.retrieve(paymentMethodId);
+    if (pm.card) {
+      const brand =
+        pm.card.brand.charAt(0).toUpperCase() + pm.card.brand.slice(1);
+      return `${brand} •••• ${pm.card.last4}`;
+    }
+    return pm.type ?? null;
+  }
+
+  static async detachPaymentMethod(paymentMethodId: string): Promise<void> {
+    await stripe.paymentMethods.detach(paymentMethodId);
+  }
+
+  /**
+   * Off-session charge of the saved card for an auto top-up. Confirmed in
+   * one call; a card that needs authentication or declines throws, and the
+   * caller records the error instead of retrying blindly.
+   */
+  static async chargeSavedPaymentMethod(input: {
+    license: OrganizationLicense;
+    paymentMethodId: string;
+    chargeUsd: number;
+    creditUsd: number;
+  }): Promise<Stripe.PaymentIntent> {
+    const customer = await this.ensureCustomer(input.license);
+    return stripe.paymentIntents.create({
+      amount: Math.round(input.chargeUsd * 100),
+      currency: "usd",
+      customer,
+      payment_method: input.paymentMethodId,
+      off_session: true,
+      confirm: true,
+      description: `Kodus credits auto top-up — $${input.creditUsd.toFixed(2)} (includes ${CREDITS_MARKUP_PCT}% platform fee)`,
+      metadata: {
+        kind: "credit_auto_topup",
+        organizationId: input.license.organizationId,
+        teamId: input.license.teamId,
+        creditUsd: String(input.creditUsd),
+        chargeUsd: String(input.chargeUsd),
+        markupPct: String(CREDITS_MARKUP_PCT),
+      },
+    });
   }
 
   static async handleWebhookEvent(event: Stripe.Event): Promise<void> {
@@ -168,6 +271,10 @@ export class StripeService {
     // that. Idempotent on the session id — Stripe redelivers.
     if (session.metadata.kind === "credit_pack") {
       await this.handleCreditPackPaid(session, organizationId);
+      return;
+    }
+    if (session.metadata.kind === "credit_payment_method") {
+      await this.handleCreditCardSaved(session, organizationId);
       return;
     }
 
@@ -238,6 +345,18 @@ export class StripeService {
       await OrganizationLicenseRepository.save(license);
     }
 
+    // The pack's card was saved off-session (setup_future_usage): keep it as
+    // the auto top-up card so "turn on auto top-up" needs no second form.
+    const paymentIntentId =
+      typeof session.payment_intent === "string"
+        ? session.payment_intent
+        : session.payment_intent?.id;
+    if (license && paymentIntentId) {
+      await this.rememberCardFromPaymentIntent(license, paymentIntentId).catch(
+        (err) => console.error("Could not record the credit-pack card", err)
+      );
+    }
+
     await CreditService.applyPurchase({
       organizationId,
       teamId,
@@ -257,6 +376,48 @@ export class StripeService {
     });
 
     clearCacheByPrefix("org-license");
+  }
+
+  private static async rememberCardFromPaymentIntent(
+    license: OrganizationLicense,
+    paymentIntentId: string
+  ): Promise<void> {
+    const intent = await stripe.paymentIntents.retrieve(paymentIntentId);
+    const pm =
+      typeof intent.payment_method === "string"
+        ? intent.payment_method
+        : intent.payment_method?.id;
+    if (!pm) return;
+    const label = await this.describePaymentMethod(pm).catch(() => null);
+    await AutoTopUpService.attachPaymentMethod(license, pm, label);
+  }
+
+  private static async handleCreditCardSaved(
+    session: Stripe.Checkout.Session,
+    organizationId: string
+  ): Promise<void> {
+    const teamId = session.metadata?.teamId || undefined;
+    const license = await OrganizationLicenseRepository.findOne({
+      where: teamId ? { organizationId, teamId } : { organizationId },
+    });
+    if (!license) return;
+    if (!license.stripeCustomerId && session.customer) {
+      license.stripeCustomerId = session.customer as string;
+      await OrganizationLicenseRepository.save(license);
+    }
+    const setupIntentId =
+      typeof session.setup_intent === "string"
+        ? session.setup_intent
+        : session.setup_intent?.id;
+    if (!setupIntentId) return;
+    const intent = await stripe.setupIntents.retrieve(setupIntentId);
+    const pm =
+      typeof intent.payment_method === "string"
+        ? intent.payment_method
+        : intent.payment_method?.id;
+    if (!pm) return;
+    const label = await this.describePaymentMethod(pm).catch(() => null);
+    await AutoTopUpService.attachPaymentMethod(license, pm, label);
   }
 
   private static async handlePaymentFailed(

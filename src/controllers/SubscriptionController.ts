@@ -5,6 +5,7 @@ import { PlanType } from "../entities/OrganizationLicense";
 import Stripe from "stripe";
 import validateAdminToken from "../config/utils/adminToken";
 import { PlanCatalogService } from "../services/PlanCatalogService";
+import { AutoTopUpService } from "../services/AutoTopUpService";
 import { CreditService } from "../services/CreditService";
 
 export class SubscriptionController {
@@ -492,6 +493,97 @@ export class SubscriptionController {
             return res
                 .status(500)
                 .json({ error: "Erro ao listar ledger de créditos" });
+        }
+    }
+
+    static async updateAutoTopUp(
+        req: Request,
+        res: Response,
+    ): Promise<Response> {
+        try {
+            const { organizationId, teamId, enabled, thresholdUsd, amountUsd } =
+                req.body ?? {};
+            if (!organizationId) {
+                return res.status(400).json({
+                    error: "ID da organização é obrigatório",
+                });
+            }
+            const result = await AutoTopUpService.updateSettings(
+                String(organizationId),
+                teamId ? String(teamId) : undefined,
+                {
+                    enabled: enabled === true,
+                    thresholdUsd:
+                        thresholdUsd === undefined ? undefined : Number(thresholdUsd),
+                    amountUsd:
+                        amountUsd === undefined ? undefined : Number(amountUsd),
+                },
+            );
+            if (result.ok === true) {
+                return res.json(result.state);
+            }
+            const code = (result as { code: string }).code;
+            const status =
+                code === "LICENSE_NOT_FOUND"
+                    ? 404
+                    : code === "NO_PAYMENT_METHOD"
+                      ? 409
+                      : 400;
+            return res.status(status).json({ error: code });
+        } catch (error) {
+            console.error("Erro ao configurar auto top-up:", error);
+            return res
+                .status(500)
+                .json({ error: "Erro ao configurar auto top-up" });
+        }
+    }
+
+    static async createCreditPaymentMethodCheckout(
+        req: Request,
+        res: Response,
+    ): Promise<Response> {
+        try {
+            const { organizationId, teamId } = req.body ?? {};
+            if (!organizationId || !teamId) {
+                return res.status(400).json({
+                    error: "ID da organização e teamId são obrigatórios",
+                });
+            }
+            const url = await StripeService.createCreditSetupSession(
+                String(organizationId),
+                String(teamId),
+            );
+            return res.json({ url });
+        } catch (error) {
+            console.error("Erro ao criar sessão de cartão:", error);
+            return res
+                .status(500)
+                .json({ error: "Erro ao criar sessão de cartão" });
+        }
+    }
+
+    static async removeCreditPaymentMethod(
+        req: Request,
+        res: Response,
+    ): Promise<Response> {
+        try {
+            const { organizationId, teamId } = req.query;
+            if (!organizationId) {
+                return res.status(400).json({
+                    error: "ID da organização é obrigatório",
+                });
+            }
+            const state = await AutoTopUpService.detachPaymentMethod(
+                String(organizationId),
+                teamId ? String(teamId) : undefined,
+            );
+            if (!state) {
+                return res.status(404).json({ error: "Licença não encontrada" });
+            }
+            return res.json(state);
+        } catch (error) {
+            console.error("Erro ao remover cartão:", error);
+            return res.status(500).json({ error: "Erro ao remover cartão" });
         }
     }
 

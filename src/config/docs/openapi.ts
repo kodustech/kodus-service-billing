@@ -359,6 +359,34 @@ export function buildOpenApiSpec() {
               format: "date-time",
               nullable: true,
             },
+            autoTopUp: { $ref: "#/components/schemas/CreditAutoTopUpDto" },
+          },
+        },
+        CreditAutoTopUpDto: {
+          type: "object",
+          required: ["enabled", "thresholdUsd", "amountUsd", "paymentMethod"],
+          properties: {
+            enabled: { type: "boolean" },
+            thresholdUsd: { type: "number", nullable: true, example: 5 },
+            amountUsd: { type: "number", nullable: true, example: 50 },
+            paymentMethod: {
+              type: "string",
+              nullable: true,
+              example: "Visa •••• 4242",
+            },
+            lastAt: { type: "string", format: "date-time", nullable: true },
+            lastError: { type: "string", nullable: true },
+          },
+        },
+        CreditAutoTopUpRequestDto: {
+          type: "object",
+          required: ["organizationId", "enabled"],
+          properties: {
+            organizationId: { type: "string" },
+            teamId: { type: "string" },
+            enabled: { type: "boolean" },
+            thresholdUsd: { type: "number", example: 5 },
+            amountUsd: { type: "number", example: 50 },
           },
         },
         CreditLedgerEntryDto: {

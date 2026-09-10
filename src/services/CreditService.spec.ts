@@ -53,6 +53,23 @@ jest.mock("../repositories/CreditLedgerRepository", () => ({
     },
 }));
 jest.mock("../config/utils/cache", () => ({ clearCacheByPrefix: jest.fn() }));
+// Auto top-up is its own module (own spec); here it only needs to answer
+// the trigger question and be observable when the debit claims an attempt.
+const autoTopUpDecision = { value: false };
+jest.mock("./AutoTopUpService", () => ({
+    AutoTopUpService: {
+        stateOf: () => ({
+            enabled: false,
+            thresholdUsd: null,
+            amountUsd: null,
+            paymentMethod: null,
+            lastAt: null,
+            lastError: null,
+        }),
+        charge: jest.fn(async () => ({ charged: true })),
+    },
+    decideAutoTopUp: jest.fn(() => autoTopUpDecision.value),
+}));
 jest.mock("./KodusNotificationClient", () => ({
     KodusNotificationClient: {
         notifyCreditsPurchased: jest.fn(async () => undefined),
@@ -61,6 +78,7 @@ jest.mock("./KodusNotificationClient", () => ({
 }));
 
 import { CreditService, decideNotification } from "./CreditService";
+import { AutoTopUpService } from "./AutoTopUpService";
 import { KodusNotificationClient } from "./KodusNotificationClient";
 import { clearCacheByPrefix } from "../config/utils/cache";
 import { CREDITS_LOW_THRESHOLD_USD } from "../config/creditPricing";
@@ -72,6 +90,7 @@ const license = (over: Partial<Record<string, unknown>> = {}) => ({
     creditBalanceUsd: 10,
     creditsLowNotifiedAt: null,
     creditsExhaustedNotifiedAt: null,
+    creditAutoTopUpLastAt: null as Date | null,
     ...over,
 });
 
@@ -84,6 +103,40 @@ beforeEach(() => {
     (KodusNotificationClient.notifyCreditsLow as jest.Mock).mockClear();
     (KodusNotificationClient.notifyCreditsPurchased as jest.Mock).mockClear();
     (clearCacheByPrefix as jest.Mock).mockClear();
+    (AutoTopUpService.charge as jest.Mock).mockClear();
+    autoTopUpDecision.value = false;
+});
+
+describe("debit — auto top-up claim", () => {
+    it("stamps the attempt under the lock and charges once, outside the transaction", async () => {
+        const lic = license({ creditBalanceUsd: 4 });
+        licenseRepo.findOne.mockResolvedValue(lic);
+        autoTopUpDecision.value = true;
+
+        await CreditService.debit({
+            organizationId: "org-1",
+            teamId: "team-1",
+            entries: [{ usageKey: "span:1", amountUsd: 1 }],
+        });
+
+        expect(lic.creditAutoTopUpLastAt).toBeInstanceOf(Date);
+        expect(licenseRepo.save).toHaveBeenCalled();
+        await new Promise((r) => setImmediate(r));
+        expect(AutoTopUpService.charge).toHaveBeenCalledTimes(1);
+        expect(AutoTopUpService.charge).toHaveBeenCalledWith("lic-1");
+    });
+
+    it("does not touch the attempt marker when the rule says no", async () => {
+        const lic = license({ creditBalanceUsd: 40 });
+        licenseRepo.findOne.mockResolvedValue(lic);
+        await CreditService.debit({
+            organizationId: "org-1",
+            teamId: "team-1",
+            entries: [{ usageKey: "span:2", amountUsd: 1 }],
+        });
+        expect(lic.creditAutoTopUpLastAt).toBeNull();
+        expect(AutoTopUpService.charge).not.toHaveBeenCalled();
+    });
 });
 
 describe("validatePurchaseAmount", () => {

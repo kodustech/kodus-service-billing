@@ -130,6 +130,45 @@ export class OrganizationLicense {
   @Column({ type: "timestamp", nullable: true })
   creditsExhaustedNotifiedAt: Date | null;
 
+  // Auto top-up: when the balance dips to `threshold`, charge the saved card
+  // for `amount` of credit (plus markup) without the customer in the loop.
+  // The card is the one Stripe saved on the last Checkout (off_session) or an
+  // explicit setup session. `lastAt` is set inside the debit transaction that
+  // decides to attempt, so concurrent debits cannot double-charge; `lastError`
+  // surfaces a declined card in the UI.
+  @Column({ type: "boolean", default: false })
+  creditAutoTopUpEnabled: boolean;
+
+  @Column({
+    type: "numeric",
+    precision: 14,
+    scale: 6,
+    nullable: true,
+    transformer: numericTransformer,
+  })
+  creditAutoTopUpThresholdUsd: number | null;
+
+  @Column({
+    type: "numeric",
+    precision: 14,
+    scale: 6,
+    nullable: true,
+    transformer: numericTransformer,
+  })
+  creditAutoTopUpAmountUsd: number | null;
+
+  @Column({ type: "varchar", nullable: true })
+  creditPaymentMethodId: string | null;
+
+  @Column({ type: "varchar", nullable: true })
+  creditPaymentMethodLabel: string | null;
+
+  @Column({ type: "timestamp", nullable: true })
+  creditAutoTopUpLastAt: Date | null;
+
+  @Column({ type: "varchar", nullable: true })
+  creditAutoTopUpLastError: string | null;
+
   @Column({ nullable: true })
   stripeCustomerId?: string;
 

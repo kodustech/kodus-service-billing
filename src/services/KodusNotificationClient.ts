@@ -70,6 +70,8 @@ export class KodusNotificationClient {
     balanceUsd: number;
     thresholdUsd: number;
     exhausted: boolean;
+    /** Set when an automatic top-up was attempted and the card failed. */
+    autoTopUpError?: string;
   }): Promise<void> {
     await this.post("/billing/webhook/credits-low", input);
   }
