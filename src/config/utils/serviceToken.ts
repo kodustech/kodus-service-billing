@@ -196,7 +196,13 @@ export function requireServiceToken(
   // `req.path` here is relative to the router mount (/api/billing), so sign
   // the full originalUrl path — the caller knows only the full URL. The query
   // is signed too (canonicalized): these routes read the tenant from it.
-  const [fullPath, queryString = ""] = (req.originalUrl || req.url).split("?");
+  // Split on the FIRST "?" only: a query value may contain a literal "?" (an
+  // unencoded return URL, say), and a plain `split("?")` would verify a
+  // truncated query while the caller signed the whole one.
+  const target = req.originalUrl || req.url;
+  const mark = target.indexOf("?");
+  const fullPath = mark === -1 ? target : target.slice(0, mark);
+  const queryString = mark === -1 ? "" : target.slice(mark + 1);
   const rawBody =
     req.method === "GET" || req.method === "DELETE"
       ? ""

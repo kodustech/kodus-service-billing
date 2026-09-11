@@ -36,7 +36,11 @@ describe("requireServiceToken", () => {
     const method = over.method ?? "POST";
     const url = over.url ?? "/api/billing/credits/debit";
     const body = over.body ?? { organizationId: "org-1" };
-    const [path, queryString = ""] = url.split("?");
+    // Split once: a value may contain a literal "?" and the helper must sign
+    // the same query the middleware verifies.
+    const mark = url.indexOf("?");
+    const path = mark === -1 ? url : url.slice(0, mark);
+    const queryString = mark === -1 ? "" : url.slice(mark + 1);
     const rawBody =
       method === "GET" || method === "DELETE" ? "" : JSON.stringify(body);
     const timestamp =
@@ -280,6 +284,15 @@ describe("requireServiceToken", () => {
       next,
     );
     expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  it("verifies a query value that contains a literal '?'", () => {
+    const url =
+      "/api/billing/credits/balance?organizationId=org-1&returnTo=/byok?credits=success";
+    const { req, res, next } = build({ method: "GET", url });
+    requireServiceToken(req as never, res as never, next);
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(res.code).toBe(0);
   });
 
   it("ignores param ORDER, so a proxy reordering the query cannot 401", () => {
