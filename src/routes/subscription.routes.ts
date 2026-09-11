@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { requireServiceToken } from "../config/utils/serviceToken";
 import express from "express";
 import { SubscriptionController } from "../controllers/SubscriptionController";
 import { cacheMiddleware } from "../middlewares/cacheMiddleware";
@@ -737,6 +738,13 @@ router.post("/migrate-to-free", async (req, res) => {
 });
 
 // ── Prepaid credits ("Kodus as the provider") ─────────────────────────────
+//
+// Every route below moves or reveals MONEY and takes the organizationId from
+// the request, so they all sit behind the shared service token: the API's
+// metering sweep and the web's server-side fetches send it, a browser never
+// reaches them (the web proxy denies /credits/*). Fails closed when the
+// secret is unset — see config/utils/serviceToken.ts.
+router.use("/credits", requireServiceToken);
 
 /**
  * @openapi
