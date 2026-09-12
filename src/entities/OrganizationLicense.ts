@@ -169,6 +169,19 @@ export class OrganizationLicense {
   @Column({ type: "varchar", nullable: true })
   creditAutoTopUpLastError: string | null;
 
+  /**
+   * Stripe idempotency key for the auto top-up attempt IN FLIGHT.
+   *
+   * Minted when a debit claims an attempt and kept until the attempt reaches a
+   * DEFINITIVE outcome (charged, or declined by the card). A retry after an
+   * UNKNOWN outcome — a Stripe timeout, a dropped response — must reuse it, or
+   * Stripe sees a new request and charges the card a second time for a charge
+   * it already captured. Rotating it per attempt is what made the idempotency
+   * key decorative; Kody caught that on PR #51.
+   */
+  @Column({ type: "varchar", nullable: true })
+  creditAutoTopUpAttemptKey: string | null;
+
   @Column({ nullable: true })
   stripeCustomerId?: string;
 

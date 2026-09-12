@@ -286,6 +286,63 @@ describe("requireServiceToken", () => {
     expect(next).toHaveBeenCalledTimes(1);
   });
 
+  it("covers a DELETE body too (it used to be signed as empty)", () => {
+    const url = "/api/billing/credits/payment-method?organizationId=org-1";
+    const body = { organizationId: "org-1", reason: "user asked" };
+    const timestamp = String(Date.now());
+    const rawBody = JSON.stringify(body);
+    const signature = sign(
+      SECRET,
+      signaturePayload(
+        "DELETE",
+        "/api/billing/credits/payment-method",
+        "organizationId=org-1",
+        timestamp,
+        rawBody,
+      ),
+    );
+    const headers: Record<string, string> = {
+      [SIGNATURE_HEADER]: signature,
+      [TIMESTAMP_HEADER]: timestamp,
+    };
+    const call = (sentRawBody: string) => {
+      const res = {
+        code: 0,
+        status(c: number) {
+          this.code = c;
+          return this;
+        },
+        json() {
+          return this;
+        },
+      };
+      const next = jest.fn();
+      requireServiceToken(
+        {
+          method: "DELETE",
+          url,
+          originalUrl: url,
+          path: "/credits/payment-method",
+          body: JSON.parse(sentRawBody),
+          rawBody: sentRawBody,
+          header: (name: string) => headers[name.toLowerCase()],
+        } as never,
+        res as never,
+        next,
+      );
+      return { res, next };
+    };
+
+    // The body it was signed with goes through.
+    expect(call(rawBody).next).toHaveBeenCalledTimes(1);
+    // A swapped body does not.
+    const tampered = call(
+      JSON.stringify({ organizationId: "victim", reason: "user asked" }),
+    );
+    expect(tampered.next).not.toHaveBeenCalled();
+    expect(tampered.res.code).toBe(401);
+  });
+
   it("verifies a query value that contains a literal '?'", () => {
     const url =
       "/api/billing/credits/balance?organizationId=org-1&returnTo=/byok?credits=success";
@@ -364,6 +421,26 @@ describe("the signature contract with kodus-ai", () => {
       }),
       signature:
         "03692a4564a44ae550d2ed76e831bf783961fe94be767f3059a1293ac30c84f6",
+    },
+    {
+      name: 'a query value carrying a literal "?" (split once, never twice)',
+      method: "GET",
+      path: "/api/billing/credits/balance",
+      query: "organizationId=o&returnTo=/byok?credits=success",
+      timestamp: "1789000000000",
+      rawBody: "",
+      signature:
+        "ca7fe2915861fc07dc4d947651841b2e4bcdd07f97ef4dafcca680a1739ca707",
+    },
+    {
+      name: "a DELETE that carries a body (no longer signed as empty)",
+      method: "DELETE",
+      path: "/api/billing/credits/payment-method",
+      query: "organizationId=o",
+      timestamp: "1789000000000",
+      rawBody: JSON.stringify({ organizationId: "o" }),
+      signature:
+        "9b9b420b6b6a7f29b6ee7fb1569f1f1e29f1376080b0faa85a0c856d1688d5e6",
     },
   ];
 

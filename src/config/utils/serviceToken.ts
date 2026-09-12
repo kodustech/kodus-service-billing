@@ -34,9 +34,10 @@ import { NextFunction, Request, Response } from "express";
  *     leaks into an access log or a trace stops working instead of being
  *     valid forever;
  *   · the RAW BODY BYTES as received (captured by the parsers' `verify`
- *     hook), never a re-serialization of the parsed object — those differ on
- *     pretty-printed JSON, `\uXXXX` escapes or `1e2`-style numbers, and the
- *     result would be a 401 no log explains.
+ *     hook), for every method, never a re-serialization of the parsed object —
+ *     those differ on pretty-printed JSON, `\uXXXX` escapes or `1e2`-style
+ *     numbers, and the result would be a 401 no log explains. No body signs
+ *     the empty string.
  *
  * The secret itself never crosses the wire, so reusing the webhook secret
  * cannot leak it into a proxy trace. Same header as the outbound direction
@@ -203,10 +204,12 @@ export function requireServiceToken(
   const mark = target.indexOf("?");
   const fullPath = mark === -1 ? target : target.slice(0, mark);
   const queryString = mark === -1 ? "" : target.slice(mark + 1);
-  const rawBody =
-    req.method === "GET" || req.method === "DELETE"
-      ? ""
-      : ((req as RequestWithRawBody).rawBody ?? "");
+  // Whatever bytes arrived, for EVERY method. Skipping the body on DELETE
+  // left a DELETE payload outside the signature, so a captured signature
+  // would validate a swapped body — and a caller that followed the documented
+  // rule and signed its DELETE body got a 401. A request with no body signs
+  // the empty string, which is what GET always does anyway.
+  const rawBody = (req as RequestWithRawBody).rawBody ?? "";
   const payload = signaturePayload(
     req.method,
     fullPath,

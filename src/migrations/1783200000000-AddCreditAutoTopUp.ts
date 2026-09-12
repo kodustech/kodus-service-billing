@@ -33,10 +33,17 @@ export class AddCreditAutoTopUp1783200000000 implements MigrationInterface {
             ALTER TABLE "billing"."organization_licenses"
             ADD "creditAutoTopUpLastError" character varying
         `);
+    // Stripe idempotency key of the attempt in flight; survives retries after
+    // an unknown outcome so a captured charge is never charged twice.
+    await queryRunner.query(`
+            ALTER TABLE "billing"."organization_licenses"
+            ADD "creditAutoTopUpAttemptKey" character varying
+        `);
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
     for (const col of [
+      "creditAutoTopUpAttemptKey",
       "creditAutoTopUpLastError",
       "creditAutoTopUpLastAt",
       "creditPaymentMethodLabel",
@@ -46,7 +53,7 @@ export class AddCreditAutoTopUp1783200000000 implements MigrationInterface {
       "creditAutoTopUpEnabled",
     ]) {
       await queryRunner.query(
-        `ALTER TABLE "billing"."organization_licenses" DROP COLUMN "${col}"`
+        `ALTER TABLE "billing"."organization_licenses" DROP COLUMN "${col}"`,
       );
     }
   }
