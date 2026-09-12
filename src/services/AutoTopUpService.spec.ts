@@ -41,6 +41,7 @@ jest.mock("./CreditService", () => ({
 }));
 
 import {
+  AUTO_TOP_UP_PARKED_MESSAGE,
   AUTO_TOP_UP_RETRY_MS,
   AutoTopUpService,
   decideAutoTopUp,
@@ -362,9 +363,10 @@ describe("charge — idempotency across retries", () => {
     );
   });
 
-  it("releases the key when Stripe refuses it for changed parameters", async () => {
-    // Reusing a key with different params captures nothing; keeping it would
-    // freeze auto top-up for this org for good.
+  it("PARKS the attempt when Stripe refuses the key, instead of re-charging", async () => {
+    // The conflict proves the earlier request reached Stripe, and says
+    // nothing about whether it captured. Releasing the key here is how you
+    // charge a customer twice; so the attempt is parked instead.
     licenseRepo.findOne.mockResolvedValue(license());
     (StripeService.chargeSavedPaymentMethod as jest.Mock).mockRejectedValue(
       Object.assign(new Error("Keys for idempotent requests..."), {
@@ -372,12 +374,52 @@ describe("charge — idempotency across retries", () => {
       }),
     );
 
-    await AutoTopUpService.charge("lic-1");
+    const r = await AutoTopUpService.charge("lic-1");
 
-    expect(licenseUpdate).toHaveBeenLastCalledWith(
-      { id: "lic-1" },
-      expect.objectContaining({ creditAutoTopUpAttemptKey: null }),
-    );
+    expect(r).toEqual({
+      charged: false,
+      reason: "PARKED_IDEMPOTENCY_CONFLICT",
+    });
+    const [, patch] = licenseUpdate.mock.calls[
+      licenseUpdate.mock.calls.length - 1
+    ] as unknown as [unknown, Record<string, unknown>];
+    // Key KEPT, feature off, reason recorded.
+    expect(patch).not.toHaveProperty("creditAutoTopUpAttemptKey");
+    expect(patch.creditAutoTopUpEnabled).toBe(false);
+    expect(patch.creditAutoTopUpLastError).toBe(AUTO_TOP_UP_PARKED_MESSAGE);
+    expect(CreditService.applyPurchase).not.toHaveBeenCalled();
+  });
+
+  it("recovers a parked attempt when the customer turns it back on", async () => {
+    const lic = license({
+      creditAutoTopUpEnabled: false,
+      creditAutoTopUpAttemptKey: "auto-topup:lic-1:111",
+      creditAutoTopUpLastError: AUTO_TOP_UP_PARKED_MESSAGE,
+    });
+    licenseRepo.findOne.mockResolvedValue(lic);
+
+    await AutoTopUpService.updateSettings("org-1", "team-1", {
+      enabled: true,
+    });
+
+    // A re-enable is the deliberate fresh start: new key next dip.
+    expect(lic.creditAutoTopUpAttemptKey).toBeNull();
+    expect(lic.creditAutoTopUpLastError).toBeNull();
+  });
+
+  it("keeps a key in flight across a NO-OP save", async () => {
+    const lic = license({
+      creditAutoTopUpAttemptKey: "auto-topup:lic-1:111",
+      creditAutoTopUpAmountUsd: 50,
+    });
+    licenseRepo.findOne.mockResolvedValue(lic);
+
+    await AutoTopUpService.updateSettings("org-1", "team-1", {
+      enabled: true,
+      amountUsd: 50,
+    });
+
+    expect(lic.creditAutoTopUpAttemptKey).toBe("auto-topup:lic-1:111");
   });
 
   it.each([
@@ -411,6 +453,16 @@ describe("charge — idempotency across retries", () => {
     const lic = license({ creditAutoTopUpAttemptKey: "auto-topup:lic-1:111" });
     await run(lic as never);
     expect(lic.creditAutoTopUpAttemptKey).toBeNull();
+  });
+
+  it("does NOT drop the key when the feature is merely switched off", async () => {
+    // Turning it off resolves nothing at the payment provider.
+    const lic = license({ creditAutoTopUpAttemptKey: "auto-topup:lic-1:111" });
+    licenseRepo.findOne.mockResolvedValue(lic);
+    await AutoTopUpService.updateSettings("org-1", "team-1", {
+      enabled: false,
+    });
+    expect(lic.creditAutoTopUpAttemptKey).toBe("auto-topup:lic-1:111");
   });
 
   it("refuses to charge when no attempt was claimed (never invents a key)", async () => {

@@ -21,10 +21,12 @@ export const AUTO_TOP_UP_RETRY_MS = 60 * 60 * 1000;
  * release the idempotency key and let the next dip mint a new one.
  *
  * Definitive: the card was declined (`card_error`), the request itself was
- * wrong (`invalid_request_error`), Stripe refused the key because it was
- * reused with different parameters (`idempotency_error` — nothing was
- * captured), or the PaymentIntent settled into a state that cannot capture
- * off-session (`requires_payment_method`, `requires_action`, `canceled`).
+ * wrong (`invalid_request_error`), or the PaymentIntent settled into a state
+ * that cannot capture off-session (`requires_payment_method`,
+ * `requires_action`, `canceled`).
+ *
+ * An idempotency conflict is deliberately NOT here — see
+ * `isIdempotencyConflict`.
  *
  * NOT definitive: a timeout, a dropped connection, a Stripe 5xx, a rate
  * limit. There the charge may well have been captured with the response lost,
@@ -46,15 +48,7 @@ export function isDefinitiveDecline(error: unknown): boolean {
     ].includes(code)
   )
     return true;
-  // Stripe refusing a key that was reused with DIFFERENT parameters captured
-  // nothing: that key is dead and holding on to it would freeze auto top-up
-  // for good.
-  if (
-    type === "StripeIdempotencyError" ||
-    type === "idempotency_error" ||
-    code === "idempotency_key_in_use"
-  )
-    return true;
+
   const message = (
     error instanceof Error ? error.message : String(error ?? "")
   ).toLowerCase();
@@ -65,6 +59,36 @@ export function isDefinitiveDecline(error: unknown): boolean {
     message.includes("card_declined")
   );
 }
+
+/**
+ * Stripe refusing a key because it was reused with DIFFERENT parameters.
+ *
+ * This says nothing about the earlier request's outcome — in fact it proves
+ * that request reached Stripe, which is the case the key is held for. So it is
+ * NOT a definitive decline: releasing the key here would let the next dip
+ * capture a second PaymentIntent for a top-up that may already have been paid.
+ *
+ * Instead the attempt is PARKED: the key is kept, auto top-up is switched off
+ * and the reason is recorded. Nothing silently re-charges, the customer sees
+ * why, and re-enabling mints a fresh key — so it self-heals through the normal
+ * UI instead of needing someone to touch the database.
+ *
+ * It should be unreachable: every path that changes the charge parameters
+ * drops the key first. If it does fire, something changed them behind those
+ * paths, and that is worth surfacing rather than guessing about.
+ */
+export function isIdempotencyConflict(error: unknown): boolean {
+  const { type, code } = (error ?? {}) as { type?: string; code?: string };
+  return (
+    type === "StripeIdempotencyError" ||
+    type === "idempotency_error" ||
+    code === "idempotency_key_in_use"
+  );
+}
+
+export const AUTO_TOP_UP_PARKED_MESSAGE =
+  "Auto top-up was paused: a previous charge attempt is unresolved at the " +
+  "payment provider. Turn it back on to retry with a new attempt.";
 
 /** What the UI sees. Never the raw Stripe ids. */
 export type AutoTopUpState = {
@@ -165,6 +189,10 @@ export class AutoTopUpService {
     });
     if (!license) return { ok: false, code: "LICENSE_NOT_FOUND" };
 
+    const wasEnabled = !!license.creditAutoTopUpEnabled;
+    // Read BEFORE the assignments below overwrite it.
+    const previousAmount = license.creditAutoTopUpAmountUsd;
+
     if (input.enabled) {
       if (!license.creditPaymentMethodId) {
         return { ok: false, code: "NO_PAYMENT_METHOD" };
@@ -188,12 +216,18 @@ export class AutoTopUpService {
       license.creditAutoTopUpLastAt = null;
       license.creditAutoTopUpLastError = null;
       // The AMOUNT is part of what an idempotency key covers, so a key held
-      // over from an attempt with an unknown outcome cannot be reused after
-      // this: Stripe would refuse it and auto top-up would stall for good.
-      license.creditAutoTopUpAttemptKey = null;
+      // over from an attempt with an unknown outcome becomes unusable when it
+      // changes. Only then, though: dropping it on a no-op save would throw
+      // away the one thing stopping Stripe from capturing twice. A re-enable
+      // also clears it — that is the deliberate fresh start that recovers a
+      // parked attempt.
+      if (amount !== previousAmount || !wasEnabled) {
+        license.creditAutoTopUpAttemptKey = null;
+      }
     } else {
       license.creditAutoTopUpEnabled = false;
-      license.creditAutoTopUpAttemptKey = null;
+      // The key stays: turning the feature off does not resolve an attempt
+      // that is already in flight, and the next enable clears it anyway.
       if (typeof input.thresholdUsd === "number") {
         license.creditAutoTopUpThresholdUsd = roundUsd(input.thresholdUsd);
       }
@@ -323,16 +357,27 @@ export class AutoTopUpService {
       console.error(
         `Auto top-up failed for org ${license.organizationId}: ${message}`,
       );
-      // A card that SAID NO is a definitive answer: release the key, so
-      // the next dip is a new charge attempt. Anything else (timeout,
-      // network, Stripe 5xx) leaves the outcome unknown — keep the key so
-      // the retry cannot double-charge a payment already captured.
-      const definitive = isDefinitiveDecline(error);
+      // An idempotency conflict is the one failure where retrying is the
+      // dangerous move: the key is registered at Stripe, so the earlier
+      // request got there, and its outcome is unknown. PARK it — keep the
+      // key, switch auto top-up off, say why — instead of charging again.
+      // Re-enabling mints a fresh key, so the customer can recover from the
+      // UI without anyone touching the database.
+      const parked = isIdempotencyConflict(error);
+      // A card that SAID NO is a definitive answer: release the key, so the
+      // next dip is a new charge attempt. Anything else (timeout, network,
+      // Stripe 5xx) leaves the outcome unknown — keep the key so the retry
+      // cannot double-charge a payment already captured.
+      const definitive = !parked && isDefinitiveDecline(error);
+      const reportedError = parked
+        ? AUTO_TOP_UP_PARKED_MESSAGE
+        : message.slice(0, 250);
       await AppDataSource.getRepository(OrganizationLicense).update(
         { id: license.id },
         {
-          creditAutoTopUpLastError: message.slice(0, 250),
+          creditAutoTopUpLastError: reportedError,
           ...(definitive ? { creditAutoTopUpAttemptKey: null } : {}),
+          ...(parked ? { creditAutoTopUpEnabled: false } : {}),
         },
       );
       clearCacheByPrefix("org-license");
@@ -342,11 +387,14 @@ export class AutoTopUpService {
         balanceUsd: roundUsd(license.creditBalanceUsd ?? 0),
         thresholdUsd: CREDITS_LOW_THRESHOLD_USD,
         exhausted: (license.creditBalanceUsd ?? 0) <= 0,
-        autoTopUpError: message.slice(0, 250),
+        autoTopUpError: reportedError,
       }).catch(() => {
         /* client swallows internally */
       });
-      return { charged: false, reason: message };
+      return {
+        charged: false,
+        reason: parked ? "PARKED_IDEMPOTENCY_CONFLICT" : message,
+      };
     }
   }
 }
