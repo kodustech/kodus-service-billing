@@ -16,6 +16,17 @@ set -e
 # missing, then hand over to the app.
 # ---------------------------------------------------------------------------
 
+# An explicit command wins, and is checked FIRST: `docker compose run app node
+# lib/src/migration.js`, a debug shell, anything. It has to come before the
+# migration block — with RUN_MIGRATIONS on (the compose default) and `set -e`
+# active, a failing automatic migration would exit the container before ever
+# reaching the command, which is exactly the command someone runs to
+# investigate that failure.
+if [ "$#" -gt 0 ]; then
+  echo "▶ Running the requested command instead of the app: $*"
+  exec "$@"
+fi
+
 RUN_MIGRATIONS="${RUN_MIGRATIONS:-false}"
 PM2_ENV="${PM2_ENV:-production}"
 
@@ -35,15 +46,6 @@ if [ "$RUN_MIGRATIONS" = "true" ]; then
   fi
 else
   echo "▶ Skipping migrations (RUN_MIGRATIONS=$RUN_MIGRATIONS)"
-fi
-
-# An explicit command wins: `docker compose run app node lib/src/migration.js`,
-# a debug shell, anything. Replacing CMD with ENTRYPOINT and not forwarding
-# "$@" would silently swallow it and boot the whole app instead — with logs
-# that look enough like success to be mistaken for it.
-if [ "$#" -gt 0 ]; then
-  echo "▶ Running the requested command instead of the app: $*"
-  exec "$@"
 fi
 
 echo "▶ Starting the app"
