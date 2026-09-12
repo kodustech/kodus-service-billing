@@ -1,5 +1,5 @@
 import { DataSource } from "typeorm";
-import { join } from 'path';
+import { join } from "path";
 import "dotenv/config";
 import { UserLicense } from "../entities/UserLicense";
 import { OrganizationLicense } from "../entities/OrganizationLicense";
@@ -27,7 +27,6 @@ export const AppDataSource = new DataSource({
   subscribers: [join(__dirname, './subscribers/*{.ts,.js}')],
 });
 
-
 export const initializeDatabase = async () => {
   const isDev = process.env.API_DATABASE_ENV === "development";
 
@@ -47,12 +46,33 @@ export const initializeDatabase = async () => {
 
   await tempDataSource.initialize();
 
+  const schema = process.env.PG_DB_SCHEMA || "billing";
   try {
-    const schema = process.env.PG_DB_SCHEMA || "billing";
-    await tempDataSource.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
-    console.log(`Schema "${schema}" created or already exists`);
-  } catch (error) {
-    console.error("Error creating schema:", error);
+    try {
+      await tempDataSource.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
+      console.log(`Schema "${schema}" created or already exists`);
+    } catch (error) {
+      // Do NOT rethrow here: a role with no CREATE privilege on the database
+      // can fail this statement even when the schema already exists, and that
+      // deployment boots perfectly well today. What must not be swallowed is
+      // the schema being genuinely ABSENT afterwards — migrations then die
+      // inside `runMigrations()` with `schema "x" does not exist`, pointing at
+      // the wrong culprit, and with `set -e` in the entrypoint plus
+      // `restart: unless-stopped` that becomes a crash loop.
+      console.error("Error creating schema:", error);
+      const [{ present }] = (await tempDataSource.query(
+        `SELECT EXISTS (
+           SELECT 1 FROM information_schema.schemata WHERE schema_name = $1
+         ) AS present`,
+        [schema],
+      )) as Array<{ present: boolean }>;
+      if (!present) {
+        throw new Error(
+          `Schema "${schema}" does not exist and could not be created: ` +
+            `${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
   } finally {
     await tempDataSource.destroy();
   }
