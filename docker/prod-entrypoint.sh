@@ -37,5 +37,14 @@ else
   echo "▶ Skipping migrations (RUN_MIGRATIONS=$RUN_MIGRATIONS)"
 fi
 
+# An explicit command wins: `docker compose run app node lib/src/migration.js`,
+# a debug shell, anything. Replacing CMD with ENTRYPOINT and not forwarding
+# "$@" would silently swallow it and boot the whole app instead — with logs
+# that look enough like success to be mistaken for it.
+if [ "$#" -gt 0 ]; then
+  echo "▶ Running the requested command instead of the app: $*"
+  exec "$@"
+fi
+
 echo "▶ Starting the app"
 exec pm2-runtime start ecosystem.config.js --env "$PM2_ENV"
