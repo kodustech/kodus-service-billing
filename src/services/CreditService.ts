@@ -1,4 +1,4 @@
-import { Brackets, In, LessThan, QueryFailedError } from "typeorm";
+import { In, LessThan, QueryFailedError } from "typeorm";
 
 import { AppDataSource } from "../config/database";
 import { clearCacheByPrefix } from "../config/utils/cache";
@@ -27,6 +27,12 @@ import {
 
 /** Postgres unique-violation SQLSTATE — the ledger's idempotency signal. */
 const UNIQUE_VIOLATION = "23505";
+
+/** `beforeId` arrives straight from the query string; an unvalidated value
+ *  makes Postgres raise 22P02 on the uuid comparison, i.e. a 500 for what is
+ *  really just a malformed cursor. */
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Built once: the ledger filter validates caller-supplied types against it. */
 const LEDGER_ENTRY_TYPES: ReadonlySet<string> = new Set(
@@ -170,34 +176,44 @@ export class CreditService {
     if (validTypes.length > 0) {
       qb.andWhere({ type: In(validTypes) });
     }
-    // The cursor's `createdAt` must be the value POSTGRES stored, not the
-    // one that came back through JSON. `createdAt` is a microsecond
-    // timestamp; an ISO string carries milliseconds, so the truncated
-    // value is strictly SMALLER than the row's real one — `createdAt =
-    // :before` then matches nothing and `createdAt < :before` excludes
-    // the rest of that batch, silently dropping rows from pagination.
-    // Looking the row up by id gives the exact stored timestamp.
-    const cursor = options.beforeId
-      ? await CreditLedgerRepository.findOne({
-          where: { id: options.beforeId, organizationId },
-          select: ["id", "createdAt"],
-        })
-      : null;
+    // `createdAt` is a MICROSECOND timestamp in Postgres, and every row of one
+    // debit batch shares it (transaction-stable `now()`). A cursor that passes
+    // through JavaScript loses that precision — the driver parses a
+    // `timestamp` into a Date, which is milliseconds — so the comparison would
+    // run against a value strictly SMALLER than the row's real one: `<
+    // :before` drops the rest of the batch and `= :before` matches nothing.
+    // Reading the row first does NOT fix that; the truncation only moves.
+    //
+    // So the timestamp never leaves the database: the keyset comparison is a
+    // row-value against a subquery, resolved inside Postgres, and only the
+    // cursor's id crosses the wire.
+    const cursorId =
+      options.beforeId && UUID_RE.test(options.beforeId)
+        ? options.beforeId
+        : undefined;
 
-    if (cursor) {
+    // Does that row exist, and belong to this org? Asked with `SELECT 1`, so
+    // again no timestamp is materialised. (An unvalidated id would also make
+    // Postgres raise 22P02 on the uuid comparison — a 500 for a malformed
+    // cursor.)
+    const cursorExists = cursorId
+      ? !!(await CreditLedgerRepository.createQueryBuilder("c")
+          .select("1", "present")
+          .where("c.id = :cursorId", { cursorId })
+          .andWhere("c.organizationId = :organizationId", { organizationId })
+          .getRawOne())
+      : false;
+
+    if (cursorExists) {
       qb.andWhere(
-        new Brackets((w) => {
-          w.where("e.createdAt < :before", {
-            before: cursor.createdAt,
-          }).orWhere("e.createdAt = :before AND e.id < :beforeId", {
-            before: cursor.createdAt,
-            beforeId: cursor.id,
-          });
-        }),
+        `(e."createdAt", e."id") < (SELECT c2."createdAt", c2."id" ` +
+          `FROM ${CreditLedgerRepository.metadata.tablePath} c2 ` +
+          `WHERE c2."id" = :cursorId AND c2."organizationId" = :organizationId)`,
+        { cursorId, organizationId },
       );
     } else if (options.before) {
-      // No id (or an id from another org / a deleted row): fall back to
-      // the timestamp alone. Same truncation caveat, hence the id.
+      // No usable cursor id (absent, malformed, another org's, deleted): the
+      // timestamp alone, which is the best that value can offer.
       qb.andWhere({ createdAt: LessThan(options.before) });
     }
     return qb.getMany();

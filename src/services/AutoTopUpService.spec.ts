@@ -362,6 +362,57 @@ describe("charge — idempotency across retries", () => {
     );
   });
 
+  it("releases the key when Stripe refuses it for changed parameters", async () => {
+    // Reusing a key with different params captures nothing; keeping it would
+    // freeze auto top-up for this org for good.
+    licenseRepo.findOne.mockResolvedValue(license());
+    (StripeService.chargeSavedPaymentMethod as jest.Mock).mockRejectedValue(
+      Object.assign(new Error("Keys for idempotent requests..."), {
+        type: "StripeIdempotencyError",
+      }),
+    );
+
+    await AutoTopUpService.charge("lic-1");
+
+    expect(licenseUpdate).toHaveBeenLastCalledWith(
+      { id: "lic-1" },
+      expect.objectContaining({ creditAutoTopUpAttemptKey: null }),
+    );
+  });
+
+  it.each([
+    {
+      name: "the amount changes",
+      run: async (lic: Record<string, unknown>) => {
+        licenseRepo.findOne.mockResolvedValue(lic);
+        await AutoTopUpService.updateSettings("org-1", "team-1", {
+          enabled: true,
+          amountUsd: 100,
+        });
+      },
+    },
+    {
+      name: "the card changes",
+      run: async (lic: Record<string, unknown>) =>
+        AutoTopUpService.attachPaymentMethod(
+          lic as never,
+          "pm_new",
+          "Visa •••• 1111",
+        ),
+    },
+    {
+      name: "the card is removed",
+      run: async (lic: Record<string, unknown>) => {
+        licenseRepo.findOne.mockResolvedValue(lic);
+        await AutoTopUpService.detachPaymentMethod("org-1", "team-1");
+      },
+    },
+  ])("drops a key in flight when $name", async ({ run }) => {
+    const lic = license({ creditAutoTopUpAttemptKey: "auto-topup:lic-1:111" });
+    await run(lic as never);
+    expect(lic.creditAutoTopUpAttemptKey).toBeNull();
+  });
+
   it("refuses to charge when no attempt was claimed (never invents a key)", async () => {
     licenseRepo.findOne.mockResolvedValue(
       license({ creditAutoTopUpAttemptKey: null }),

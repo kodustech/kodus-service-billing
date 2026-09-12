@@ -21,9 +21,10 @@ export const AUTO_TOP_UP_RETRY_MS = 60 * 60 * 1000;
  * release the idempotency key and let the next dip mint a new one.
  *
  * Definitive: the card was declined (`card_error`), the request itself was
- * wrong (`invalid_request_error`), or the PaymentIntent settled into a state
- * that cannot capture off-session (`requires_payment_method`,
- * `requires_action`, `canceled`).
+ * wrong (`invalid_request_error`), Stripe refused the key because it was
+ * reused with different parameters (`idempotency_error` — nothing was
+ * captured), or the PaymentIntent settled into a state that cannot capture
+ * off-session (`requires_payment_method`, `requires_action`, `canceled`).
  *
  * NOT definitive: a timeout, a dropped connection, a Stripe 5xx, a rate
  * limit. There the charge may well have been captured with the response lost,
@@ -43,6 +44,15 @@ export function isDefinitiveDecline(error: unknown): boolean {
       "incorrect_cvc",
       "insufficient_funds",
     ].includes(code)
+  )
+    return true;
+  // Stripe refusing a key that was reused with DIFFERENT parameters captured
+  // nothing: that key is dead and holding on to it would freeze auto top-up
+  // for good.
+  if (
+    type === "StripeIdempotencyError" ||
+    type === "idempotency_error" ||
+    code === "idempotency_key_in_use"
   )
     return true;
   const message = (
@@ -177,8 +187,13 @@ export class AutoTopUpService {
       // Re-arm: a fresh opt-in should fire on the next qualifying debit.
       license.creditAutoTopUpLastAt = null;
       license.creditAutoTopUpLastError = null;
+      // The AMOUNT is part of what an idempotency key covers, so a key held
+      // over from an attempt with an unknown outcome cannot be reused after
+      // this: Stripe would refuse it and auto top-up would stall for good.
+      license.creditAutoTopUpAttemptKey = null;
     } else {
       license.creditAutoTopUpEnabled = false;
+      license.creditAutoTopUpAttemptKey = null;
       if (typeof input.thresholdUsd === "number") {
         license.creditAutoTopUpThresholdUsd = roundUsd(input.thresholdUsd);
       }
@@ -201,6 +216,9 @@ export class AutoTopUpService {
     license.creditPaymentMethodId = paymentMethodId;
     license.creditPaymentMethodLabel = label;
     license.creditAutoTopUpLastError = null;
+    // A different card is a different charge: any key still in flight is
+    // unusable, so drop it rather than have Stripe refuse the next attempt.
+    license.creditAutoTopUpAttemptKey = null;
     await OrganizationLicenseRepository.save(license);
     clearCacheByPrefix("org-license");
   }
@@ -219,6 +237,7 @@ export class AutoTopUpService {
     license.creditPaymentMethodLabel = null;
     license.creditAutoTopUpEnabled = false;
     license.creditAutoTopUpLastError = null;
+    license.creditAutoTopUpAttemptKey = null;
     await OrganizationLicenseRepository.save(license);
     clearCacheByPrefix("org-license");
     if (pm) {

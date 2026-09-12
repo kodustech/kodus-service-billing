@@ -481,80 +481,112 @@ describe("adjust (admin)", () => {
  * is what the query filters on. Kody caught this on PR #51.
  */
 describe("listLedger — cursor precision", () => {
-  const qb = () => {
-    const calls: Array<[string, Record<string, unknown>] | [unknown]> = [];
-    const builder: Record<string, unknown> = {
-      where: jest.fn(() => builder),
-      andWhere: jest.fn((arg: unknown, params?: Record<string, unknown>) => {
-        calls.push(params ? [arg as string, params] : [arg]);
-        return builder;
+  /**
+   * `createdAt` is a MICROSECOND timestamp and a whole debit batch shares it,
+   * so the keyset cursor must compare against the value Postgres holds. Any
+   * round trip through JavaScript truncates it to milliseconds — the driver
+   * parses a timestamp into a Date — and the batch's remaining rows become
+   * unreachable. Reading the cursor row into JS does not fix that; it only
+   * moves the truncation (Kody, PR #51, twice). So the comparison is a
+   * row-value against a subquery and ONLY the cursor id crosses the wire.
+   */
+  const builders = () => {
+    const main = {
+      sql: [] as Array<{ sql: unknown; params?: Record<string, unknown> }>,
+      where: jest.fn(() => main),
+      andWhere: jest.fn((sql: unknown, params?: Record<string, unknown>) => {
+        main.sql.push({ sql, params });
+        return main;
       }),
-      orderBy: jest.fn(() => builder),
-      addOrderBy: jest.fn(() => builder),
-      take: jest.fn(() => builder),
+      orderBy: jest.fn(() => main),
+      addOrderBy: jest.fn(() => main),
+      take: jest.fn(() => main),
       getMany: jest.fn(async () => []),
     };
-    return { builder, calls };
+    const cursor = {
+      found: true,
+      select: jest.fn(() => cursor),
+      where: jest.fn(() => cursor),
+      andWhere: jest.fn(() => cursor),
+      getRawOne: jest.fn(async () =>
+        cursor.found ? { present: 1 } : undefined,
+      ),
+    };
+    (CreditLedgerRepository.createQueryBuilder as jest.Mock).mockImplementation(
+      (alias: string) => (alias === "c" ? cursor : main),
+    );
+    return { main, cursor };
   };
 
-  it("filters on the timestamp POSTGRES stored, not the one JSON echoed back", async () => {
-    const stored = new Date("2026-09-10T12:00:00.123Z");
-    // The row as stored; `.getTime()` only carries milliseconds in JS, so the
-    // point is the SOURCE of the value: the row, never the request.
-    (CreditLedgerRepository.findOne as jest.Mock).mockResolvedValue({
-      id: "entry-9",
-      createdAt: stored,
-    });
-    const { builder, calls } = qb();
-    (CreditLedgerRepository.createQueryBuilder as jest.Mock).mockReturnValue(
-      builder,
-    );
+  beforeEach(() => {
+    (CreditLedgerRepository as unknown as Record<string, unknown>).metadata = {
+      tablePath: "billing.credit_ledger_entries",
+    };
+  });
+
+  it("compares inside Postgres and binds no timestamp at all", async () => {
+    const { main, cursor } = builders();
+    cursor.found = true;
 
     await CreditService.listLedger("org-1", {
-      before: new Date("2026-09-10T12:00:00.000Z"), // truncated by the client
-      beforeId: "entry-9",
+      // The client echoes back a millisecond-truncated value; it must not be
+      // what the query filters on.
+      before: new Date("2026-09-10T12:00:00.000Z"),
+      beforeId: "3f1a7c62-5b0e-4f7a-9c11-2b6d8e4a7f90",
       limit: 10,
     });
 
-    // The cursor row was looked up, scoped to the org.
-    expect(CreditLedgerRepository.findOne).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: "entry-9", organizationId: "org-1" },
-      }),
+    const keyset = main.sql.find(
+      (c) => typeof c.sql === "string" && c.sql.includes("SELECT c2."),
     );
-    // And the bracket carries the STORED timestamp, not the client's.
-    const bracket = (builder.andWhere as jest.Mock).mock.calls.find(
-      ([arg]) =>
-        typeof arg === "object" &&
-        arg !== null &&
-        "whereFactory" in (arg as object),
-    );
-    expect(bracket).toBeDefined();
-    const captured: Record<string, unknown>[] = [];
-    (bracket![0] as { whereFactory: (w: unknown) => void }).whereFactory({
-      where: (_sql: string, params: Record<string, unknown>) => {
-        captured.push(params);
-        return {
-          orWhere: (_s: string, p: Record<string, unknown>) => captured.push(p),
-        };
-      },
+    expect(keyset).toBeDefined();
+    expect(keyset!.sql).toContain('(e."createdAt", e."id") <');
+    expect(keyset!.sql).toContain("billing.credit_ledger_entries");
+    // Only ids and the org id are bound — no Date anywhere.
+    expect(keyset!.params).toEqual({
+      cursorId: "3f1a7c62-5b0e-4f7a-9c11-2b6d8e4a7f90",
+      organizationId: "org-1",
     });
-    expect(captured[0].before).toBe(stored);
-    expect(captured[1]).toEqual({ before: stored, beforeId: "entry-9" });
-    expect(calls.length).toBeGreaterThan(0);
+    for (const call of main.sql) {
+      for (const value of Object.values(call.params ?? {})) {
+        expect(value).not.toBeInstanceOf(Date);
+      }
+    }
+    // The existence check asks for a constant, never for the timestamp.
+    expect(cursor.select).toHaveBeenCalledWith("1", "present");
   });
 
-  it("falls back to the raw timestamp when the id is unknown", async () => {
-    (CreditLedgerRepository.findOne as jest.Mock).mockResolvedValue(null);
-    const { builder } = qb();
-    (CreditLedgerRepository.createQueryBuilder as jest.Mock).mockReturnValue(
-      builder,
-    );
+  it("falls back to the timestamp when the cursor row is gone", async () => {
+    const { main, cursor } = builders();
+    cursor.found = false;
     const before = new Date("2026-09-10T12:00:00.000Z");
 
-    await CreditService.listLedger("org-1", { before, beforeId: "gone" });
+    await CreditService.listLedger("org-1", {
+      before,
+      beforeId: "3f1a7c62-5b0e-4f7a-9c11-2b6d8e4a7f90",
+    });
 
-    expect(builder.andWhere).toHaveBeenCalledWith({
+    expect(main.andWhere).toHaveBeenCalledWith({
+      createdAt: expect.anything(),
+    });
+    expect(
+      main.sql.some(
+        (c) => typeof c.sql === "string" && c.sql.includes("SELECT c2."),
+      ),
+    ).toBe(false);
+  });
+
+  it("never sends a malformed cursor to Postgres (22P02 would be a 500)", async () => {
+    const { main, cursor } = builders();
+
+    await CreditService.listLedger("org-1", {
+      before: new Date("2026-09-10T12:00:00.000Z"),
+      beforeId: "not-a-uuid; drop table",
+    });
+
+    // No lookup at all, and the page still comes back (timestamp fallback).
+    expect(cursor.getRawOne).not.toHaveBeenCalled();
+    expect(main.andWhere).toHaveBeenCalledWith({
       createdAt: expect.anything(),
     });
   });
