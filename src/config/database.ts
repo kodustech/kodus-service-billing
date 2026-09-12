@@ -60,9 +60,15 @@ export const initializeDatabase = async () => {
       // the wrong culprit, and with `set -e` in the entrypoint plus
       // `restart: unless-stopped` that becomes a crash loop.
       console.error("Error creating schema:", error);
+      // `pg_namespace`, not `information_schema.schemata`: that view only
+      // shows schemas the connected role can reach, so a least-privilege role
+      // — exactly the case this guard exists for — would report an existing
+      // schema as absent and get told to create something that is already
+      // there. The catalog is not privilege-filtered, so the later error is
+      // the real one (a missing GRANT, say).
       const [{ present }] = (await tempDataSource.query(
         `SELECT EXISTS (
-           SELECT 1 FROM information_schema.schemata WHERE schema_name = $1
+           SELECT 1 FROM pg_namespace WHERE nspname = $1
          ) AS present`,
         [schema],
       )) as Array<{ present: boolean }>;

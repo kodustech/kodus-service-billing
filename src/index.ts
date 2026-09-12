@@ -23,7 +23,13 @@ initializeDatabase()
     import("./cron");
   })
   .catch((err) => {
+    // Fatal on purpose. `initializeDatabase()` now rejects when the schema is
+    // genuinely absent, and swallowing that leaves the process serving with an
+    // uninitialised DataSource and no cron jobs — broken, but alive, so
+    // nothing restarts it and nothing says why. Exiting turns it into a
+    // crash loop with the real cause in the logs.
     console.error("Error during database initialization", err);
+    process.exit(1);
   });
 
 app.use(helmet());
