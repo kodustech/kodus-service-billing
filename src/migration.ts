@@ -8,17 +8,27 @@
  * tsconfig, which fails on `process`/`console` for want of node types.
  */
 import "dotenv/config";
-import { AppDataSource } from "./config/database";
+import { AppDataSource, initializeDatabase } from "./config/database";
 
-AppDataSource.initialize().then(() => {
-    AppDataSource.runMigrations().then(() => {
+// `initializeDatabase()` and not `AppDataSource.initialize()`: it runs the
+// `CREATE SCHEMA IF NOT EXISTS` bootstrap first. Migrations now run BEFORE the
+// app, so on a fresh database nothing else would have created the schema, and
+// TypeORM would fail creating its `migrations` table there. With `set -e` in
+// the entrypoint and `restart: unless-stopped` in compose, that is not a 500
+// on first read — it is a container that never boots.
+initializeDatabase()
+  .then(() => {
+    AppDataSource.runMigrations()
+      .then(() => {
         console.log("Migrations executadas com sucesso!");
         process.exit(0);
-    }).catch(error => {
+      })
+      .catch((error) => {
         console.error("Erro ao executar migrations:", error);
         process.exit(1);
-    });
-}).catch(error => {
+      });
+  })
+  .catch((error) => {
     console.error("Erro ao conectar ao banco:", error);
     process.exit(1);
-}); 
+  });
