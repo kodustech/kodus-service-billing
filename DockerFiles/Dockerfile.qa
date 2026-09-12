@@ -33,5 +33,10 @@ RUN mkdir -p /app/logs
 # Expondo a porta
 EXPOSE ${PORT}
 
-# Comando de inicialização usando ecosystem.config.js diretamente
-CMD ["pm2-runtime", "start", "ecosystem.config.js", "--env", "homolog"] 
+# Boot goes through the entrypoint: it runs pending migrations when
+# RUN_MIGRATIONS=true and then starts pm2. Same pattern as kodus-ai.
+COPY docker/prod-entrypoint.sh /app/docker/prod-entrypoint.sh
+RUN chmod +x /app/docker/prod-entrypoint.sh
+ENV PM2_ENV=homolog
+
+ENTRYPOINT ["/app/docker/prod-entrypoint.sh"] 

@@ -12,6 +12,9 @@ services:
       - "3992:3992"
     environment:
       - ENV=homolog
+      # Pending migrations run on boot (docker/prod-entrypoint.sh).
+      # Override per host if a deploy must skip them.
+      - RUN_MIGRATIONS=${RUN_MIGRATIONS:-true}
     env_file:
       - .env.qa
     restart: unless-stopped
