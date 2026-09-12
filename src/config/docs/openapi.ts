@@ -281,6 +281,12 @@ export function buildOpenApiSpec() {
                 $ref: "#/components/schemas/TrialUnlockDto",
               },
             },
+            creditBalanceUsd: {
+              type: "number",
+              description:
+                "Prepaid-credit balance (USD) for models routed by Kodus. May be negative after metered usage.",
+              example: 42.517,
+            },
           },
         },
         ConsumeTrialReviewCreditRequestDto: {
@@ -321,6 +327,203 @@ export function buildOpenApiSpec() {
                 $ref: "#/components/schemas/TrialUnlockDto",
               },
             },
+          },
+        },
+        CreditBalanceDto: {
+          type: "object",
+          required: [
+            "balanceUsd",
+            "lowThresholdUsd",
+            "markupPct",
+            "packsUsd",
+            "minPurchaseUsd",
+            "maxPurchaseUsd",
+            "lifetimePurchasedUsd",
+            "lifetimeDebitedUsd",
+          ],
+          properties: {
+            balanceUsd: { type: "number", example: 42.517 },
+            lowThresholdUsd: { type: "number", example: 5 },
+            markupPct: { type: "number", example: 7 },
+            packsUsd: {
+              type: "array",
+              items: { type: "number" },
+              example: [20, 50, 100, 500],
+            },
+            minPurchaseUsd: { type: "number", example: 10 },
+            maxPurchaseUsd: { type: "number", example: 5000 },
+            lifetimePurchasedUsd: { type: "number", example: 100 },
+            lifetimeDebitedUsd: { type: "number", example: 57.483 },
+            lastPurchaseAt: {
+              type: "string",
+              format: "date-time",
+              nullable: true,
+            },
+            autoTopUp: { $ref: "#/components/schemas/CreditAutoTopUpDto" },
+          },
+        },
+        CreditAutoTopUpDto: {
+          type: "object",
+          required: ["enabled", "thresholdUsd", "amountUsd", "paymentMethod"],
+          properties: {
+            enabled: { type: "boolean" },
+            thresholdUsd: { type: "number", nullable: true, example: 5 },
+            amountUsd: { type: "number", nullable: true, example: 50 },
+            paymentMethod: {
+              type: "string",
+              nullable: true,
+              example: "Visa •••• 4242",
+            },
+            lastAt: { type: "string", format: "date-time", nullable: true },
+            lastError: { type: "string", nullable: true },
+          },
+        },
+        CreditAutoTopUpRequestDto: {
+          type: "object",
+          required: ["organizationId", "enabled"],
+          properties: {
+            organizationId: { type: "string" },
+            teamId: { type: "string" },
+            enabled: { type: "boolean" },
+            thresholdUsd: { type: "number", example: 5 },
+            amountUsd: { type: "number", example: 50 },
+          },
+        },
+        CreditLedgerEntryDto: {
+          type: "object",
+          required: [
+            "id",
+            "organizationId",
+            "type",
+            "amountUsd",
+            "balanceAfterUsd",
+            "usageKey",
+            "createdAt",
+          ],
+          properties: {
+            id: { type: "string", format: "uuid" },
+            organizationId: { type: "string" },
+            teamId: { type: "string", nullable: true },
+            type: {
+              type: "string",
+              enum: ["purchase", "debit", "adjustment", "refund"],
+            },
+            amountUsd: {
+              type: "number",
+              description: "Signed: purchases positive, debits negative.",
+              example: -0.0421,
+            },
+            balanceAfterUsd: { type: "number", example: 42.517 },
+            usageKey: { type: "string", example: "span:66f1c0a2e4b0f3d1a2b3c4d5" },
+            metadata: { type: "object", additionalProperties: true },
+            createdAt: { type: "string", format: "date-time" },
+          },
+        },
+        CreditLedgerPageDto: {
+          type: "object",
+          required: ["entries"],
+          properties: {
+            entries: {
+              type: "array",
+              items: { $ref: "#/components/schemas/CreditLedgerEntryDto" },
+            },
+          },
+        },
+        CreditCheckoutRequestDto: {
+          type: "object",
+          required: ["organizationId", "teamId", "creditUsd"],
+          properties: {
+            organizationId: { type: "string", example: "org_123" },
+            teamId: { type: "string", example: "team_456" },
+            creditUsd: {
+              type: "number",
+              description:
+                "Credit amount to load (USD). A listed pack, or any amount within min/max.",
+              example: 100,
+            },
+          },
+        },
+        CreditCheckoutResponseDto: {
+          type: "object",
+          required: ["url", "creditUsd", "chargeUsd", "markupPct"],
+          properties: {
+            url: { type: "string", format: "uri" },
+            creditUsd: { type: "number", example: 100 },
+            chargeUsd: { type: "number", example: 107 },
+            markupPct: { type: "number", example: 7 },
+          },
+        },
+        CreditDebitEntryDto: {
+          type: "object",
+          required: ["usageKey", "amountUsd"],
+          properties: {
+            usageKey: { type: "string", example: "span:66f1c0a2e4b0f3d1a2b3c4d5" },
+            amountUsd: {
+              type: "number",
+              description: "List-price cost of the usage (USD, positive).",
+              example: 0.0421,
+            },
+            metadata: { type: "object", additionalProperties: true },
+          },
+        },
+        CreditDebitRequestDto: {
+          type: "object",
+          required: ["organizationId", "entries"],
+          properties: {
+            organizationId: { type: "string", example: "org_123" },
+            teamId: { type: "string", example: "team_456" },
+            entries: {
+              type: "array",
+              maxItems: 500,
+              items: { $ref: "#/components/schemas/CreditDebitEntryDto" },
+            },
+          },
+        },
+        CreditAdjustRequestDto: {
+          type: "object",
+          required: ["organizationId", "amountUsd", "usageKey", "reason", "adminToken"],
+          properties: {
+            organizationId: { type: "string", example: "org_123" },
+            teamId: { type: "string", example: "team_456" },
+            amountUsd: {
+              type: "number",
+              description: "Signed USD; positive credits, negative debits.",
+              example: 25,
+            },
+            usageKey: { type: "string", example: "adjust:goodwill-2026-09" },
+            reason: { type: "string", example: "Goodwill after outage" },
+            adminToken: { type: "string" },
+          },
+        },
+        CreditAdjustResponseDto: {
+          type: "object",
+          required: ["applied", "balanceUsd"],
+          properties: {
+            applied: { type: "boolean", example: true },
+            balanceUsd: { type: "number", example: 67.5 },
+          },
+        },
+        CreditDebitResponseDto: {
+          type: "object",
+          required: [
+            "applied",
+            "skipped",
+            "appliedUsd",
+            "balanceUsd",
+            "lowBalance",
+            "exhausted",
+          ],
+          properties: {
+            applied: { type: "integer", example: 12 },
+            skipped: {
+              type: "integer",
+              description: "Entries whose usageKey was already in the ledger.",
+              example: 1,
+            },
+            appliedUsd: { type: "number", example: 0.5123 },
+            balanceUsd: { type: "number", example: 41.9 },
+            lowBalance: { type: "boolean", example: false },
+            exhausted: { type: "boolean", example: false },
           },
         },
         TrialUnlockSignalsDto: {

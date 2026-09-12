@@ -52,6 +52,30 @@ export class KodusNotificationClient {
     await this.post("/billing/webhook/plan-changed", input);
   }
 
+  /** A credit pack was paid for and applied to the ledger. */
+  static async notifyCreditsPurchased(input: {
+    organizationId: string;
+    teamId?: string;
+    creditUsd: number;
+    balanceUsd: number;
+  }): Promise<void> {
+    await this.post("/billing/webhook/credits-purchased", input);
+  }
+
+  /** Balance crossed the low threshold (or hit zero: `exhausted`). One shot
+   *  per crossing — the ledger re-arms it on the next top-up. */
+  static async notifyCreditsLow(input: {
+    organizationId: string;
+    teamId?: string;
+    balanceUsd: number;
+    thresholdUsd: number;
+    exhausted: boolean;
+    /** Set when an automatic top-up was attempted and the card failed. */
+    autoTopUpError?: string;
+  }): Promise<void> {
+    await this.post("/billing/webhook/credits-low", input);
+  }
+
   private static async post(
     path: string,
     body: Record<string, unknown>

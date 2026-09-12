@@ -3,6 +3,7 @@ import { join } from 'path';
 import "dotenv/config";
 import { UserLicense } from "../entities/UserLicense";
 import { OrganizationLicense } from "../entities/OrganizationLicense";
+import { CreditLedgerEntry } from "../entities/CreditLedgerEntry";
 
 const isDev = process.env.API_DATABASE_ENV === "development";
 
@@ -21,7 +22,7 @@ export const AppDataSource = new DataSource({
         rejectUnauthorized: false, // necessário para RDS
       }
     : false,
-  entities: [UserLicense, OrganizationLicense],
+  entities: [UserLicense, OrganizationLicense, CreditLedgerEntry],
   migrations: [join(__dirname, '../migrations/*{.ts,.js}')],
   subscribers: [join(__dirname, './subscribers/*{.ts,.js}')],
 });

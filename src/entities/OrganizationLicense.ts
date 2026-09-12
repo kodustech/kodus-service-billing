@@ -7,6 +7,8 @@ import {
   Index,
 } from "typeorm";
 
+import { numericTransformer } from "./CreditLedgerEntry";
+
 export enum SubscriptionStatus {
   TRIAL = "trial",
   ACTIVE = "active",
@@ -105,6 +107,80 @@ export class OrganizationLicense {
 
   @Column({ type: "jsonb", default: () => "'[]'::jsonb" })
   trialReviewCreditUsageKeys: string[];
+
+  // Prepaid credits ("Kodus as the provider"). The balance is denormalized
+  // from credit_ledger_entries and only ever changes inside the same
+  // transaction that appends a ledger row, under a row lock. May go negative:
+  // usage is metered after the fact, so a running review can overshoot; the
+  // gate on the API side blocks the NEXT review, not the one in flight.
+  @Column({
+    type: "numeric",
+    precision: 14,
+    scale: 6,
+    default: 0,
+    transformer: numericTransformer,
+  })
+  creditBalanceUsd: number;
+
+  // One notification per crossing: set when the low-balance / exhausted
+  // webhook fires, cleared by the next purchase that lifts the balance back.
+  @Column({ type: "timestamp", nullable: true })
+  creditsLowNotifiedAt: Date | null;
+
+  @Column({ type: "timestamp", nullable: true })
+  creditsExhaustedNotifiedAt: Date | null;
+
+  // Auto top-up: when the balance dips to `threshold`, charge the saved card
+  // for `amount` of credit (plus markup) without the customer in the loop.
+  // The card is the one Stripe saved on the last Checkout (off_session) or an
+  // explicit setup session. `lastAt` is set inside the debit transaction that
+  // decides to attempt, so concurrent debits cannot double-charge; `lastError`
+  // surfaces a declined card in the UI.
+  @Column({ type: "boolean", default: false })
+  creditAutoTopUpEnabled: boolean;
+
+  @Column({
+    type: "numeric",
+    precision: 14,
+    scale: 6,
+    nullable: true,
+    transformer: numericTransformer,
+  })
+  creditAutoTopUpThresholdUsd: number | null;
+
+  @Column({
+    type: "numeric",
+    precision: 14,
+    scale: 6,
+    nullable: true,
+    transformer: numericTransformer,
+  })
+  creditAutoTopUpAmountUsd: number | null;
+
+  @Column({ type: "varchar", nullable: true })
+  creditPaymentMethodId: string | null;
+
+  @Column({ type: "varchar", nullable: true })
+  creditPaymentMethodLabel: string | null;
+
+  @Column({ type: "timestamp", nullable: true })
+  creditAutoTopUpLastAt: Date | null;
+
+  @Column({ type: "varchar", nullable: true })
+  creditAutoTopUpLastError: string | null;
+
+  /**
+   * Stripe idempotency key for the auto top-up attempt IN FLIGHT.
+   *
+   * Minted when a debit claims an attempt and kept until the attempt reaches a
+   * DEFINITIVE outcome (charged, or declined by the card). A retry after an
+   * UNKNOWN outcome — a Stripe timeout, a dropped response — must reuse it, or
+   * Stripe sees a new request and charges the card a second time for a charge
+   * it already captured. Rotating it per attempt is what made the idempotency
+   * key decorative; Kody caught that on PR #51.
+   */
+  @Column({ type: "varchar", nullable: true })
+  creditAutoTopUpAttemptKey: string | null;
 
   @Column({ nullable: true })
   stripeCustomerId?: string;

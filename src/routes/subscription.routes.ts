@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { requireServiceToken } from "../config/utils/serviceToken";
 import express from "express";
 import { SubscriptionController } from "../controllers/SubscriptionController";
 import { cacheMiddleware } from "../middlewares/cacheMiddleware";
@@ -734,6 +735,463 @@ router.post("/update-trial", async (req, res) => {
  */
 router.post("/migrate-to-free", async (req, res) => {
   await SubscriptionController.migrateToFreePlan(req, res);
+});
+
+// ── Prepaid credits ("Kodus as the provider") ─────────────────────────────
+//
+// Every route below moves or reveals MONEY and takes the organizationId from
+// the request, so they all sit behind the shared service token: the API's
+// metering sweep and the web's server-side fetches send it, a browser never
+// reaches them (the web proxy denies /credits/*). Fails closed when the
+// secret is unset — see config/utils/serviceToken.ts.
+router.use("/credits", requireServiceToken);
+
+/**
+ * @openapi
+ * /api/billing/credits/balance:
+ *   get:
+ *     tags: [Billing]
+ *     summary: Get prepaid credit balance
+ *     description: Current prepaid-credit balance for an organization, plus the commercial parameters the UI needs (packs, markup, low threshold) and lifetime totals.
+ *     operationId: getCreditBalance
+ *     parameters:
+ *       - in: query
+ *         name: organizationId
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: teamId
+ *         required: false
+ *         schema:
+ *           type: string
+ *     responses:
+ *       "200":
+ *         description: Balance and parameters.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/CreditBalanceDto"
+ *       "400":
+ *         description: Missing organizationId.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "401":
+ *         description: Unauthorized.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "403":
+ *         description: Forbidden.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "404":
+ *         description: License not found.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "500":
+ *         description: Internal server error.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ */
+router.get("/credits/balance", async (req, res) => {
+  await SubscriptionController.getCreditBalance(req, res);
+});
+
+/**
+ * @openapi
+ * /api/billing/credits/ledger:
+ *   get:
+ *     tags: [Billing]
+ *     summary: List prepaid credit ledger entries
+ *     description: Append-only ledger for an organization, newest first. Paginate with `before` (ISO timestamp of the last entry seen).
+ *     operationId: listCreditLedger
+ *     parameters:
+ *       - in: query
+ *         name: organizationId
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: limit
+ *         required: false
+ *         schema:
+ *           type: integer
+ *           default: 50
+ *           maximum: 200
+ *       - in: query
+ *         name: before
+ *         required: false
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *       - in: query
+ *         name: types
+ *         required: false
+ *         description: Comma-separated entry types to keep (purchase, debit, adjustment, refund).
+ *         schema:
+ *           type: string
+ *     responses:
+ *       "200":
+ *         description: Ledger page.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/CreditLedgerPageDto"
+ *       "400":
+ *         description: Invalid request.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "401":
+ *         description: Unauthorized.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "403":
+ *         description: Forbidden.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "500":
+ *         description: Internal server error.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ */
+router.get("/credits/ledger", async (req, res) => {
+  await SubscriptionController.listCreditLedger(req, res);
+});
+
+/**
+ * @openapi
+ * /api/billing/credits/checkout:
+ *   post:
+ *     tags: [Billing]
+ *     summary: Create a Stripe checkout for a credit pack
+ *     description: One-time Stripe Checkout (mode payment). The customer pays `creditUsd` plus the platform markup; the ledger is credited with `creditUsd` once Stripe reports the session paid.
+ *     operationId: createCreditCheckout
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: "#/components/schemas/CreditCheckoutRequestDto"
+ *           example:
+ *             organizationId: org_123
+ *             teamId: team_456
+ *             creditUsd: 100
+ *     responses:
+ *       "200":
+ *         description: Checkout URL and the quoted charge.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/CreditCheckoutResponseDto"
+ *       "400":
+ *         description: Invalid amount or missing ids.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "401":
+ *         description: Unauthorized.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "403":
+ *         description: Forbidden.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "500":
+ *         description: Internal server error.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ */
+router.post("/credits/checkout", async (req, res) => {
+  await SubscriptionController.createCreditCheckout(req, res);
+});
+
+/**
+ * @openapi
+ * /api/billing/credits/auto-topup:
+ *   post:
+ *     tags: [Billing]
+ *     summary: Configure automatic top-up of prepaid credits
+ *     description: When enabled, a debit that leaves the balance at or below `thresholdUsd` charges the saved card for `amountUsd` of credit (plus the platform fee). Enabling requires a saved card (409 otherwise).
+ *     operationId: updateCreditAutoTopUp
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: "#/components/schemas/CreditAutoTopUpRequestDto"
+ *     responses:
+ *       "200":
+ *         description: The saved settings.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/CreditAutoTopUpDto"
+ *       "400":
+ *         description: Invalid amount or threshold.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "404":
+ *         description: License not found.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "409":
+ *         description: No saved card (NO_PAYMENT_METHOD).
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "500":
+ *         description: Internal server error.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ */
+router.post("/credits/auto-topup", async (req, res) => {
+  await SubscriptionController.updateAutoTopUp(req, res);
+});
+
+/**
+ * @openapi
+ * /api/billing/credits/payment-method/checkout:
+ *   post:
+ *     tags: [Billing]
+ *     summary: Start a Stripe Checkout (setup mode) to save a card for auto top-up
+ *     operationId: createCreditPaymentMethodCheckout
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [organizationId, teamId]
+ *             properties:
+ *               organizationId: { type: string }
+ *               teamId: { type: string }
+ *     responses:
+ *       "200":
+ *         description: Hosted Checkout URL.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 url: { type: string }
+ *       "400":
+ *         description: Missing ids.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "500":
+ *         description: Internal server error.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ */
+router.post("/credits/payment-method/checkout", async (req, res) => {
+  await SubscriptionController.createCreditPaymentMethodCheckout(req, res);
+});
+
+/**
+ * @openapi
+ * /api/billing/credits/payment-method:
+ *   delete:
+ *     tags: [Billing]
+ *     summary: Forget the saved card (turns auto top-up off)
+ *     operationId: removeCreditPaymentMethod
+ *     parameters:
+ *       - in: query
+ *         name: organizationId
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: teamId
+ *         required: false
+ *         schema:
+ *           type: string
+ *     responses:
+ *       "200":
+ *         description: The resulting auto top-up state.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/CreditAutoTopUpDto"
+ *       "404":
+ *         description: License not found.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "500":
+ *         description: Internal server error.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ */
+router.delete("/credits/payment-method", async (req, res) => {
+  await SubscriptionController.removeCreditPaymentMethod(req, res);
+});
+
+/**
+ * @openapi
+ * /api/billing/credits/debit:
+ *   post:
+ *     tags: [Billing]
+ *     summary: Debit metered usage from prepaid credits
+ *     description: Applies a batch of usage debits atomically. Each entry is idempotent on `usageKey` (a duplicate is skipped, never charged twice). The balance may go negative; the caller gates the NEXT review on it.
+ *     operationId: debitCredits
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: "#/components/schemas/CreditDebitRequestDto"
+ *           example:
+ *             organizationId: org_123
+ *             teamId: team_456
+ *             entries:
+ *               - usageKey: span:66f1c0a2e4b0f3d1a2b3c4d5
+ *                 amountUsd: 0.0421
+ *                 metadata:
+ *                   model: anthropic/claude-sonnet-5
+ *                   correlationId: run_abc
+ *                   prNumber: 42
+ *     responses:
+ *       "200":
+ *         description: Batch outcome and the resulting balance.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/CreditDebitResponseDto"
+ *       "400":
+ *         description: Invalid request payload.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "401":
+ *         description: Unauthorized.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "403":
+ *         description: Forbidden.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "404":
+ *         description: License not found.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "500":
+ *         description: Internal server error.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ */
+router.post("/credits/debit", async (req, res) => {
+  await SubscriptionController.debitCredits(req, res);
+});
+
+/**
+ * @openapi
+ * /api/billing/credits/adjust:
+ *   post:
+ *     tags: [Billing]
+ *     summary: Manually adjust prepaid credits (admin)
+ *     description: Signed adjustment by Kodus (goodwill, correction). Requires the admin token in the body. Idempotent on `usageKey`.
+ *     operationId: adjustCredits
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: "#/components/schemas/CreditAdjustRequestDto"
+ *           example:
+ *             organizationId: org_123
+ *             teamId: team_456
+ *             amountUsd: 25
+ *             usageKey: adjust:goodwill-2026-09
+ *             reason: Goodwill after outage
+ *             adminToken: "***"
+ *     responses:
+ *       "200":
+ *         description: Adjustment outcome and the resulting balance.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/CreditAdjustResponseDto"
+ *       "400":
+ *         description: Invalid request payload.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "401":
+ *         description: Unauthorized.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "403":
+ *         description: Invalid admin token.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "404":
+ *         description: License not found.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "500":
+ *         description: Internal server error.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ */
+router.post("/credits/adjust", async (req, res) => {
+  await SubscriptionController.adjustCredits(req, res);
 });
 
 export default router;

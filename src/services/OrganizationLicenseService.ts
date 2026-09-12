@@ -550,12 +550,17 @@ export class OrganizationLicenseService {
         trialReviewCreditsRemaining?: number;
         trialCreditTier?: string;
         trialUnlocks?: TrialUnlock[];
+        creditBalanceUsd?: number;
     }> {
         const license = await OrganizationLicenseRepository.findOne({
             where: { organizationId, teamId },
         });
 
         if (!license) return { valid: false };
+
+        // Prepaid-credit balance ("Kodus as the provider") rides on every
+        // found-license shape: the API's pre-review gate reads it from here.
+        const creditBalanceUsd = Number(license.creditBalanceUsd ?? 0);
 
         // Plano gratuito é sempre válido
         if (license.planType === PlanType.FREE_BYOK) {
@@ -566,6 +571,7 @@ export class OrganizationLicenseService {
                 numberOfLicenses: license.totalLicenses,
                 stripeCustomerId: license?.stripeCustomerId,
                 byok: isByokPlan(license.planType),
+                creditBalanceUsd,
             };
         }
 
@@ -584,6 +590,7 @@ export class OrganizationLicenseService {
                     numberOfLicenses: migratedLicense.totalLicenses,
                     stripeCustomerId: migratedLicense?.stripeCustomerId,
                     byok: isByokPlan(migratedLicense.planType),
+                    creditBalanceUsd,
                 };
             }
 
@@ -599,6 +606,7 @@ export class OrganizationLicenseService {
                 trialEnd: license.trialEnd,
                 stripeCustomerId: license?.stripeCustomerId,
                 ...buildTrialCreditPayload(license),
+                creditBalanceUsd,
             };
         }
 
@@ -613,6 +621,7 @@ export class OrganizationLicenseService {
             numberOfLicenses: license.totalLicenses,
             stripeCustomerId: license?.stripeCustomerId,
             byok: isByokPlan(license.planType),
+            creditBalanceUsd,
         };
     }
 

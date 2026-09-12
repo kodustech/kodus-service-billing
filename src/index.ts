@@ -4,6 +4,7 @@ import helmet from "helmet";
 import cors from "cors";
 import { initializeDatabase, AppDataSource } from "./config/database";
 import subscriptionRoutes from "./routes/subscription.routes";
+import { captureRawBody } from "./config/utils/serviceToken";
 import corsOptions from "./config/utils/cors";
 import { setupLifecycleHandlers } from "./config/utils/lifecycle";
 import "dotenv/config";
@@ -38,8 +39,11 @@ app.use((req, res, next) => {
   }
 });
 
-app.use(express.urlencoded({ extended: false }));
-app.use(express.json({ limit: "10mb" }));
+// `verify` keeps the exact bytes on the request: the credit routes check an
+// HMAC signature over the body AS RECEIVED, and a re-serialization of the
+// parsed object is not byte-identical to what the caller signed.
+app.use(express.urlencoded({ extended: false, verify: captureRawBody }));
+app.use(express.json({ limit: "10mb", verify: captureRawBody }));
 
 registerApiDocs(app);
 
