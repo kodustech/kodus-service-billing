@@ -17,6 +17,10 @@ import { buildKodusApiUrl } from "../config/utils/urlBuilder";
  *     KODUS_NOTIFICATION_WEBHOOK_SECRET here).
  *   - Bounded timeout (3s) so a hung kodus-ai never holds up the
  *     billing service.
+ *   - Paths live under `/billing/events/*` and must never contain
+ *     "webhook": the kodus-ai ALB routes every `*\/webhook*` path to its
+ *     webhooks ingestion service, and these are served by the API
+ *     (kodus-ai#2007).
  */
 export class KodusNotificationClient {
   private static readonly TIMEOUT_MS = 3_000;
@@ -30,7 +34,7 @@ export class KodusNotificationClient {
     nextRetryAt?: string;
     updatePaymentUrl?: string;
   }): Promise<void> {
-    await this.post("/billing/webhook/payment-failed", input);
+    await this.post("/billing/events/payment-failed", input);
   }
 
   static async notifyTrialExpiring(input: {
@@ -40,7 +44,7 @@ export class KodusNotificationClient {
     daysRemaining: number;
     upgradeUrl?: string;
   }): Promise<void> {
-    await this.post("/billing/webhook/trial-expiring", input);
+    await this.post("/billing/events/trial-expiring", input);
   }
 
   static async notifyPlanChanged(input: {
@@ -49,7 +53,7 @@ export class KodusNotificationClient {
     planType?: string;
     subscriptionStatus?: string;
   }): Promise<void> {
-    await this.post("/billing/webhook/plan-changed", input);
+    await this.post("/billing/events/plan-changed", input);
   }
 
   /** A credit pack was paid for and applied to the ledger. */
@@ -59,7 +63,7 @@ export class KodusNotificationClient {
     creditUsd: number;
     balanceUsd: number;
   }): Promise<void> {
-    await this.post("/billing/webhook/credits-purchased", input);
+    await this.post("/billing/events/credits-purchased", input);
   }
 
   /** Balance crossed the low threshold (or hit zero: `exhausted`). One shot
@@ -73,7 +77,7 @@ export class KodusNotificationClient {
     /** Set when an automatic top-up was attempted and the card failed. */
     autoTopUpError?: string;
   }): Promise<void> {
-    await this.post("/billing/webhook/credits-low", input);
+    await this.post("/billing/events/credits-low", input);
   }
 
   private static async post(
