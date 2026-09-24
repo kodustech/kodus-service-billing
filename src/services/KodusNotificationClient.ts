@@ -1,6 +1,12 @@
 import axios from "axios";
 import { createHmac } from "crypto";
 
+import {
+  SIGNATURE_HEADER,
+  TIMESTAMP_HEADER,
+  sign,
+  signaturePayload,
+} from "../config/utils/serviceToken";
 import { buildKodusApiUrl } from "../config/utils/urlBuilder";
 
 /**
@@ -11,9 +17,12 @@ import { buildKodusApiUrl } from "../config/utils/urlBuilder";
  *   - Strictly additive. Every public method swallows all errors so the
  *     calling Stripe webhook / cron path is unaffected when the kodus-ai
  *     API is down, slow, or the env vars aren't configured.
- *   - Each request is signed with HMAC-SHA256 over the **raw JSON body**
- *     and a `x-kodus-signature` header; the receiver verifies with the
- *     same shared secret (env: API_BILLING_WEBHOOK_SECRET on kodus-ai,
+ *   - Signed with the same scheme as the calls this service receives
+ *     (`serviceToken.ts`): HMAC-SHA256 over
+ *     `METHOD\n/path\n<query>\n<timestamp>\n<raw body>`, in
+ *     `x-kodus-signature` + `x-kodus-timestamp`, so a captured signature can
+ *     neither be replayed on another route nor after 5 minutes. The secret
+ *     is shared (API_BILLING_WEBHOOK_SECRET on kodus-ai,
  *     KODUS_NOTIFICATION_WEBHOOK_SECRET here).
  *   - Bounded timeout (3s) so a hung kodus-ai never holds up the
  *     billing service.
@@ -91,23 +100,19 @@ export class KodusNotificationClient {
     body: Record<string, unknown>
   ): Promise<void> {
     try {
-      const url = buildKodusApiUrl(`${this.PATH_PREFIX}/${event}`);
+      const path = `${this.PATH_PREFIX}/${event}`;
+      const url = buildKodusApiUrl(path);
       if (!url) return; // Integration not configured for this env.
 
       const secret = process.env.KODUS_NOTIFICATION_WEBHOOK_SECRET;
       if (!secret) return; // No secret — silently skip rather than 401.
 
       const rawBody = JSON.stringify(body);
-      const signature = createHmac("sha256", secret)
-        .update(rawBody)
-        .digest("hex");
+      const timestamp = String(Date.now());
 
-      const send = (target: string) =>
+      const send = (target: string, headers: Record<string, string>) =>
         axios.post(target, rawBody, {
-          headers: {
-            "Content-Type": "application/json",
-            "x-kodus-signature": signature,
-          },
+          headers: { "Content-Type": "application/json", ...headers },
           timeout: this.TIMEOUT_MS,
           // Don't transform — body is already a string and signature is
           // computed over exactly that string.
@@ -115,7 +120,13 @@ export class KodusNotificationClient {
         });
 
       try {
-        await send(url);
+        await send(url, {
+          [SIGNATURE_HEADER]: sign(
+            secret,
+            signaturePayload("POST", path, "", timestamp, rawBody)
+          ),
+          [TIMESTAMP_HEADER]: timestamp,
+        });
       } catch (error) {
         const legacyUrl = buildKodusApiUrl(
           `${this.LEGACY_PATH_PREFIX}/${event}`
@@ -127,7 +138,12 @@ export class KodusNotificationClient {
         ) {
           throw error;
         }
-        await send(legacyUrl);
+        // The legacy receiver verifies an HMAC over the body alone.
+        await send(legacyUrl, {
+          [SIGNATURE_HEADER]: createHmac("sha256", secret)
+            .update(rawBody)
+            .digest("hex"),
+        });
       }
     } catch (error) {
       // Hard rule: never let an outbound notification failure bubble

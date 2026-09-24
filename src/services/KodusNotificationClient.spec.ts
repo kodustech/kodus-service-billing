@@ -34,6 +34,10 @@ describe("KodusNotificationClient", () => {
     process.env.KODUS_NOTIFICATION_WEBHOOK_SECRET = SECRET;
   });
 
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   afterAll(() => {
     delete process.env.KODUS_NOTIFICATION_WEBHOOK_SECRET;
   });
@@ -100,15 +104,23 @@ describe("KodusNotificationClient", () => {
     },
   );
 
-  it("signs the exact bytes it sends", async () => {
+  it("signs method, path, timestamp and the exact bytes it sends", async () => {
     await KodusNotificationClient.notifyPlanChanged({
       organizationId: "org-1",
       planType: "free",
     });
 
     const { rawBody, config } = sent();
+    const timestamp = config.headers["x-kodus-timestamp"];
+    expect(Number(timestamp)).toBeGreaterThan(0);
     expect(config.headers["x-kodus-signature"]).toBe(
-      createHmac("sha256", SECRET).update(rawBody).digest("hex"),
+      createHmac("sha256", SECRET)
+        .update(
+          ["POST", "/billing/events/plan-changed", "", timestamp, rawBody].join(
+            "\n",
+          ),
+        )
+        .digest("hex"),
     );
   });
 
@@ -119,6 +131,7 @@ describe("KodusNotificationClient", () => {
   // Change both together.
   it("matches the golden vector kodus-ai verifies", async () => {
     process.env.KODUS_NOTIFICATION_WEBHOOK_SECRET = "golden-vector-secret";
+    jest.spyOn(Date, "now").mockReturnValue(1790000000000);
 
     await KodusNotificationClient.notifyPlanChanged({
       organizationId: "org-1",
@@ -131,8 +144,9 @@ describe("KodusNotificationClient", () => {
     expect(rawBody).toBe(
       '{"organizationId":"org-1","teamId":"team-1","planType":"teams_byok","subscriptionStatus":"active"}',
     );
+    expect(config.headers["x-kodus-timestamp"]).toBe("1790000000000");
     expect(config.headers["x-kodus-signature"]).toBe(
-      "dc0921843a6b8747d3750476608ef2fe4089b94b14963bae7792c0814eaae023",
+      "a1e66b1c95da6a84331fc3813b4d5c0853d3c0a674080aa3ac4833bfa0fb5297",
     );
   });
 
@@ -148,9 +162,10 @@ describe("KodusNotificationClient", () => {
       expect(sent(1).url).toBe(
         "https://api.kodus.io/billing/webhook/plan-changed",
       );
+      // Same bytes; the legacy receiver verifies an HMAC over the body alone.
       expect(sent(1).rawBody).toBe(sent(0).rawBody);
       expect(sent(1).config.headers["x-kodus-signature"]).toBe(
-        sent(0).config.headers["x-kodus-signature"],
+        createHmac("sha256", SECRET).update(sent(1).rawBody).digest("hex"),
       );
     });
 
