@@ -112,10 +112,11 @@ describe("KodusNotificationClient", () => {
     );
   });
 
-  // Cross-service contract: kodus-ai verifies these exact bytes. The same
-  // literal vector is pinned in kodus-ai's
-  // apps/api/src/controllers/billingEvents.controller.spec.ts (added in
-  // kodustech/kodus-ai#2008) — change both.
+  // Cross-service contract: kodus-ai verifies these exact bytes on
+  // /billing/events/<event>. The same literal vector is pinned in kodus-ai's
+  // apps/api/src/controllers/billingEvents.controller.spec.ts, on branch
+  // fix/2007-webhooks-boot-memory (kodustech/kodus-ai#2008) until it merges.
+  // Change both together.
   it("matches the golden vector kodus-ai verifies", async () => {
     process.env.KODUS_NOTIFICATION_WEBHOOK_SECRET = "golden-vector-secret";
 
