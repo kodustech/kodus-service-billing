@@ -17,10 +17,6 @@ import { buildKodusApiUrl } from "../config/utils/urlBuilder";
  *     KODUS_NOTIFICATION_WEBHOOK_SECRET here).
  *   - Bounded timeout (3s) so a hung kodus-ai never holds up the
  *     billing service.
- *   - Paths live under `/billing/events/*` and must never contain
- *     "webhook": the kodus-ai ALB routes every `*\/webhook*` path to its
- *     webhooks ingestion service, and these are served by the API
- *     (kodus-ai#2007).
  */
 export class KodusNotificationClient {
   private static readonly TIMEOUT_MS = 3_000;
@@ -34,7 +30,7 @@ export class KodusNotificationClient {
     nextRetryAt?: string;
     updatePaymentUrl?: string;
   }): Promise<void> {
-    await this.post("/billing/events/payment-failed", input);
+    await this.post("payment-failed", input);
   }
 
   static async notifyTrialExpiring(input: {
@@ -44,7 +40,7 @@ export class KodusNotificationClient {
     daysRemaining: number;
     upgradeUrl?: string;
   }): Promise<void> {
-    await this.post("/billing/events/trial-expiring", input);
+    await this.post("trial-expiring", input);
   }
 
   static async notifyPlanChanged(input: {
@@ -53,7 +49,7 @@ export class KodusNotificationClient {
     planType?: string;
     subscriptionStatus?: string;
   }): Promise<void> {
-    await this.post("/billing/events/plan-changed", input);
+    await this.post("plan-changed", input);
   }
 
   /** A credit pack was paid for and applied to the ledger. */
@@ -63,7 +59,7 @@ export class KodusNotificationClient {
     creditUsd: number;
     balanceUsd: number;
   }): Promise<void> {
-    await this.post("/billing/events/credits-purchased", input);
+    await this.post("credits-purchased", input);
   }
 
   /** Balance crossed the low threshold (or hit zero: `exhausted`). One shot
@@ -77,15 +73,25 @@ export class KodusNotificationClient {
     /** Set when an automatic top-up was attempted and the card failed. */
     autoTopUpError?: string;
   }): Promise<void> {
-    await this.post("/billing/events/credits-low", input);
+    await this.post("credits-low", input);
   }
 
+  /** Served by the kodus-ai API. Never put "webhook" in it: the kodus-ai ALB
+   *  routes every `*\/webhook*` path to its webhooks ingestion service. */
+  private static readonly PATH_PREFIX = "/billing/events";
+
+  /** Pre-kodus-ai#2007 receiver on the webhooks service. Tried once, only
+   *  when the API answers 404, so the two deploys can land in any order or
+   *  be rolled back independently. Drop it once kodus-ai removes the legacy
+   *  `/billing/webhook/*` controller. */
+  private static readonly LEGACY_PATH_PREFIX = "/billing/webhook";
+
   private static async post(
-    path: string,
+    event: string,
     body: Record<string, unknown>
   ): Promise<void> {
     try {
-      const url = buildKodusApiUrl(path);
+      const url = buildKodusApiUrl(`${this.PATH_PREFIX}/${event}`);
       if (!url) return; // Integration not configured for this env.
 
       const secret = process.env.KODUS_NOTIFICATION_WEBHOOK_SECRET;
@@ -96,21 +102,38 @@ export class KodusNotificationClient {
         .update(rawBody)
         .digest("hex");
 
-      await axios.post(url, rawBody, {
-        headers: {
-          "Content-Type": "application/json",
-          "x-kodus-signature": signature,
-        },
-        timeout: this.TIMEOUT_MS,
-        // Don't transform — body is already a string and signature is
-        // computed over exactly that string.
-        transformRequest: [(data) => data],
-      });
+      const send = (target: string) =>
+        axios.post(target, rawBody, {
+          headers: {
+            "Content-Type": "application/json",
+            "x-kodus-signature": signature,
+          },
+          timeout: this.TIMEOUT_MS,
+          // Don't transform — body is already a string and signature is
+          // computed over exactly that string.
+          transformRequest: [(data) => data],
+        });
+
+      try {
+        await send(url);
+      } catch (error) {
+        const legacyUrl = buildKodusApiUrl(
+          `${this.LEGACY_PATH_PREFIX}/${event}`
+        );
+        if (
+          !legacyUrl ||
+          !axios.isAxiosError(error) ||
+          error.response?.status !== 404
+        ) {
+          throw error;
+        }
+        await send(legacyUrl);
+      }
     } catch (error) {
       // Hard rule: never let an outbound notification failure bubble
       // back into Stripe webhook handlers or trial-expiring cron runs.
       console.error(
-        `KodusNotificationClient: failed to deliver ${path}`,
+        `KodusNotificationClient: failed to deliver ${event}`,
         error instanceof Error ? error.message : error
       );
     }
