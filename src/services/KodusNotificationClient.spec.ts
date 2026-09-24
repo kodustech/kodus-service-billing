@@ -114,7 +114,8 @@ describe("KodusNotificationClient", () => {
 
   // Cross-service contract: kodus-ai verifies these exact bytes. The same
   // literal vector is pinned in kodus-ai's
-  // apps/api/src/controllers/billingEvents.controller.spec.ts — change both.
+  // apps/api/src/controllers/billingEvents.controller.spec.ts (added in
+  // kodustech/kodus-ai#2008) — change both.
   it("matches the golden vector kodus-ai verifies", async () => {
     process.env.KODUS_NOTIFICATION_WEBHOOK_SECRET = "golden-vector-secret";
 
