@@ -1,5 +1,4 @@
 import axios from "axios";
-import { createHmac } from "crypto";
 
 import { KodusNotificationClient } from "./KodusNotificationClient";
 
@@ -104,26 +103,6 @@ describe("KodusNotificationClient", () => {
     },
   );
 
-  it("signs method, path, timestamp and the exact bytes it sends", async () => {
-    await KodusNotificationClient.notifyPlanChanged({
-      organizationId: "org-1",
-      planType: "free",
-    });
-
-    const { rawBody, config } = sent();
-    const timestamp = config.headers["x-kodus-timestamp"];
-    expect(Number(timestamp)).toBeGreaterThan(0);
-    expect(config.headers["x-kodus-signature"]).toBe(
-      createHmac("sha256", SECRET)
-        .update(
-          ["POST", "/billing/events/plan-changed", "", timestamp, rawBody].join(
-            "\n",
-          ),
-        )
-        .digest("hex"),
-    );
-  });
-
   // Cross-service contract: kodus-ai verifies these exact bytes on
   // /billing/events/<event>. The same literal vector is pinned in kodus-ai's
   // apps/api/src/controllers/billingEvents.controller.spec.ts, on branch
@@ -162,11 +141,14 @@ describe("KodusNotificationClient", () => {
       expect(sent(1).url).toBe(
         "https://api.kodus.io/billing/webhook/plan-changed",
       );
-      // Same bytes; the legacy receiver verifies an HMAC over the body alone.
+      // Same bytes; the legacy receiver verifies an HMAC over the body alone
+      // (literal vector for "test-secret" + these bytes).
+      expect(sent(1).rawBody).toBe('{"organizationId":"org-1"}');
       expect(sent(1).rawBody).toBe(sent(0).rawBody);
       expect(sent(1).config.headers["x-kodus-signature"]).toBe(
-        createHmac("sha256", SECRET).update(sent(1).rawBody).digest("hex"),
+        "46fe404f3230ff3c22cff1bc7cee871f70ea51ec09559d60a7585845dc9478a2",
       );
+      expect(sent(1).config.headers["x-kodus-timestamp"]).toBeUndefined();
     });
 
     it.each([
@@ -182,6 +164,23 @@ describe("KodusNotificationClient", () => {
       });
 
       expect(post).toHaveBeenCalledTimes(1);
+    });
+
+    it("logs the target and status when kodus-ai rejects the callback", async () => {
+      post.mockRejectedValueOnce(
+        Object.assign(httpError(401), {
+          config: { url: "https://api.kodus.io/billing/events/plan-changed" },
+        }),
+      );
+      const log = jest.spyOn(console, "error").mockImplementation(() => undefined);
+
+      await KodusNotificationClient.notifyPlanChanged({
+        organizationId: "org-1",
+      });
+
+      expect(log.mock.calls[0][0]).toBe(
+        "KodusNotificationClient: failed to deliver plan-changed to https://api.kodus.io/billing/events/plan-changed (401)",
+      );
     });
 
     it("sends once when the API accepts it", async () => {

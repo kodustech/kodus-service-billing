@@ -148,8 +148,17 @@ export class KodusNotificationClient {
     } catch (error) {
       // Hard rule: never let an outbound notification failure bubble
       // back into Stripe webhook handlers or trial-expiring cron runs.
+      // Only a 404 falls back: a 401/500 from kodus-ai is a signature or
+      // config problem there, surfaced here with the target and status
+      // instead of being masked by the legacy receiver.
+      const status = axios.isAxiosError(error)
+        ? error.response?.status
+        : undefined;
+      const target = axios.isAxiosError(error) ? error.config?.url : undefined;
       console.error(
-        `KodusNotificationClient: failed to deliver ${event}`,
+        `KodusNotificationClient: failed to deliver ${event} to ${
+          target ?? "kodus-ai"
+        } (${status ?? "no response"})`,
         error instanceof Error ? error.message : error
       );
     }
