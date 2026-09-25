@@ -89,11 +89,18 @@ export class KodusNotificationClient {
    *  routes every `*\/webhook*` path to its webhooks ingestion service. */
   private static readonly PATH_PREFIX = "/billing/events";
 
-  /** Pre-kodus-ai#2007 receiver on the webhooks service. Tried once, only
-   *  when the API answers 404, so the two deploys can land in any order or
-   *  be rolled back independently. Drop it once kodus-ai removes the legacy
-   *  `/billing/webhook/*` controller. */
+  /** Pre-kodus-ai#2007 receiver on the webhooks service. Tried once when
+   *  the API rejects the call before its handler runs, so the two deploys
+   *  can land in any order or be rolled back independently. Drop it (and
+   *  FALLBACK_STATUSES) once kodus-ai removes the legacy controller. */
   private static readonly LEGACY_PATH_PREFIX = "/billing/webhook";
+
+  /** API answers that mean the handler never ran, so nothing was emitted
+   *  and the legacy receiver can take the same bytes: 404 (route not
+   *  deployed yet), 401 (signature/timestamp rejected, e.g. clock skew on
+   *  this side — the legacy receiver does not read the timestamp) and 500
+   *  (the API's billing secret or raw-body capture is missing). */
+  private static readonly FALLBACK_STATUSES = new Set([404, 401, 500]);
 
   private static async post(
     event: string,
@@ -131,13 +138,20 @@ export class KodusNotificationClient {
         const legacyUrl = buildKodusApiUrl(
           `${this.LEGACY_PATH_PREFIX}/${event}`
         );
+        const status = axios.isAxiosError(error)
+          ? error.response?.status
+          : undefined;
         if (
           !legacyUrl ||
-          !axios.isAxiosError(error) ||
-          error.response?.status !== 404
+          status === undefined ||
+          !this.FALLBACK_STATUSES.has(status)
         ) {
           throw error;
         }
+        // Keep the primary rejection visible even when the fallback lands.
+        console.warn(
+          `KodusNotificationClient: ${event} rejected by ${url} (${status}), retrying the legacy receiver`
+        );
         // The legacy receiver verifies an HMAC over the body alone.
         await send(legacyUrl, {
           [SIGNATURE_HEADER]: createHmac("sha256", secret)
@@ -148,9 +162,7 @@ export class KodusNotificationClient {
     } catch (error) {
       // Hard rule: never let an outbound notification failure bubble
       // back into Stripe webhook handlers or trial-expiring cron runs.
-      // Only a 404 falls back: a 401/500 from kodus-ai is a signature or
-      // config problem there, surfaced here with the target and status
-      // instead of being masked by the legacy receiver.
+      // Log the target and status so a drop is diagnosable.
       const status = axios.isAxiosError(error)
         ? error.response?.status
         : undefined;

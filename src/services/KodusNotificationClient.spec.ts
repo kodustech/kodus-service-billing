@@ -130,8 +130,32 @@ describe("KodusNotificationClient", () => {
   });
 
   describe("legacy receiver fallback (deploy order / rollback skew)", () => {
-    it("retries once on the legacy /billing/webhook path when the API answers 404", async () => {
+    it.each([404, 401, 500])(
+      "retries once on the legacy receiver when the API answers %i before its handler",
+      async (status) => {
+        post.mockRejectedValueOnce(httpError(status));
+        const warn = jest
+          .spyOn(console, "warn")
+          .mockImplementation(() => undefined);
+
+        await KodusNotificationClient.notifyPlanChanged({
+          organizationId: "org-1",
+        });
+
+        expect(post).toHaveBeenCalledTimes(2);
+        expect(sent(1).url).toBe(
+          "https://api.kodus.io/billing/webhook/plan-changed",
+        );
+        // The primary rejection stays visible even though delivery landed.
+        expect(warn.mock.calls[0][0]).toBe(
+          `KodusNotificationClient: plan-changed rejected by https://api.kodus.io/billing/events/plan-changed (${status}), retrying the legacy receiver`,
+        );
+      },
+    );
+
+    it("sends the legacy receiver the same bytes, signed over the body alone", async () => {
       post.mockRejectedValueOnce(httpError(404));
+      jest.spyOn(console, "warn").mockImplementation(() => undefined);
 
       await KodusNotificationClient.notifyPlanChanged({
         organizationId: "org-1",
@@ -152,8 +176,8 @@ describe("KodusNotificationClient", () => {
     });
 
     it.each([
-      ["401", httpError(401)],
-      ["500", httpError(500)],
+      ["400", httpError(400)],
+      ["503", httpError(503)],
       ["a timeout", httpError()],
     ])("does not fall back on %s", async (_label, error) => {
       post.mockRejectedValueOnce(error);
@@ -166,9 +190,9 @@ describe("KodusNotificationClient", () => {
       expect(post).toHaveBeenCalledTimes(1);
     });
 
-    it("logs the target and status when kodus-ai rejects the callback", async () => {
+    it("logs the target and status when a callback is dropped", async () => {
       post.mockRejectedValueOnce(
-        Object.assign(httpError(401), {
+        Object.assign(httpError(503), {
           config: { url: "https://api.kodus.io/billing/events/plan-changed" },
         }),
       );
@@ -179,7 +203,7 @@ describe("KodusNotificationClient", () => {
       });
 
       expect(log.mock.calls[0][0]).toBe(
-        "KodusNotificationClient: failed to deliver plan-changed to https://api.kodus.io/billing/events/plan-changed (401)",
+        "KodusNotificationClient: failed to deliver plan-changed to https://api.kodus.io/billing/events/plan-changed (503)",
       );
     });
 
