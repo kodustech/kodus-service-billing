@@ -95,19 +95,28 @@ export class KodusNotificationClient {
    *  FALLBACK_STATUSES) once kodus-ai removes the legacy controller. */
   private static readonly LEGACY_PATH_PREFIX = "/billing/webhook";
 
-  /** API answers that mean the handler never ran, so nothing was emitted
+  /** Answers that mean the API handler never ran, so nothing was emitted
    *  and the legacy receiver can take the same bytes: 404 (route not
    *  deployed yet), 401 (signature/timestamp rejected, e.g. clock skew on
-   *  this side — the legacy receiver does not read the timestamp) and 500
-   *  (the API's billing secret or raw-body capture is missing). */
-  private static readonly FALLBACK_STATUSES = new Set([404, 401, 500]);
+   *  this side — the legacy receiver does not read the timestamp), 500 (the
+   *  API's billing secret or raw-body capture is missing) and 502/503 (the
+   *  ALB has no healthy API target during a deploy or crash). 504 stays out
+   *  on purpose: the handler may have run and only the response was lost,
+   *  so a retry could emit twice. */
+  private static readonly FALLBACK_STATUSES = new Set([
+    404, 401, 500, 502, 503,
+  ]);
 
   private static async post(
     event: string,
     body: Record<string, unknown>
   ): Promise<void> {
+    let attemptedPath: string | undefined;
     try {
       const path = `${this.PATH_PREFIX}/${event}`;
+      const legacyPath = `${this.LEGACY_PATH_PREFIX}/${event}`;
+      // Logged instead of the URL: host and port come from the environment.
+      attemptedPath = path;
       const url = buildKodusApiUrl(path);
       if (!url) return; // Integration not configured for this env.
 
@@ -135,9 +144,7 @@ export class KodusNotificationClient {
           [TIMESTAMP_HEADER]: timestamp,
         });
       } catch (error) {
-        const legacyUrl = buildKodusApiUrl(
-          `${this.LEGACY_PATH_PREFIX}/${event}`
-        );
+        const legacyUrl = buildKodusApiUrl(legacyPath);
         const status = axios.isAxiosError(error)
           ? error.response?.status
           : undefined;
@@ -150,8 +157,9 @@ export class KodusNotificationClient {
         }
         // Keep the primary rejection visible even when the fallback lands.
         console.warn(
-          `KodusNotificationClient: ${event} rejected by ${url} (${status}), retrying the legacy receiver`
+          `KodusNotificationClient: ${event} rejected by ${path} (${status}), retrying ${legacyPath}`
         );
+        attemptedPath = legacyPath;
         // The legacy receiver verifies an HMAC over the body alone.
         await send(legacyUrl, {
           [SIGNATURE_HEADER]: createHmac("sha256", secret)
@@ -166,10 +174,9 @@ export class KodusNotificationClient {
       const status = axios.isAxiosError(error)
         ? error.response?.status
         : undefined;
-      const target = axios.isAxiosError(error) ? error.config?.url : undefined;
       console.error(
         `KodusNotificationClient: failed to deliver ${event} to ${
-          target ?? "kodus-ai"
+          attemptedPath ?? "kodus-ai"
         } (${status ?? "no response"})`,
         error instanceof Error ? error.message : error
       );
