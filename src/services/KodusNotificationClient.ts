@@ -1,6 +1,12 @@
 import axios from "axios";
 import { createHmac } from "crypto";
 
+import {
+  SIGNATURE_HEADER,
+  TIMESTAMP_HEADER,
+  sign,
+  signaturePayload,
+} from "../config/utils/serviceToken";
 import { buildKodusApiUrl } from "../config/utils/urlBuilder";
 
 /**
@@ -11,9 +17,12 @@ import { buildKodusApiUrl } from "../config/utils/urlBuilder";
  *   - Strictly additive. Every public method swallows all errors so the
  *     calling Stripe webhook / cron path is unaffected when the kodus-ai
  *     API is down, slow, or the env vars aren't configured.
- *   - Each request is signed with HMAC-SHA256 over the **raw JSON body**
- *     and a `x-kodus-signature` header; the receiver verifies with the
- *     same shared secret (env: API_BILLING_WEBHOOK_SECRET on kodus-ai,
+ *   - Signed with the same scheme as the calls this service receives
+ *     (`serviceToken.ts`): HMAC-SHA256 over
+ *     `METHOD\n/path\n<query>\n<timestamp>\n<raw body>`, in
+ *     `x-kodus-signature` + `x-kodus-timestamp`, so a captured signature can
+ *     neither be replayed on another route nor after 5 minutes. The secret
+ *     is shared (API_BILLING_WEBHOOK_SECRET on kodus-ai,
  *     KODUS_NOTIFICATION_WEBHOOK_SECRET here).
  *   - Bounded timeout (3s) so a hung kodus-ai never holds up the
  *     billing service.
@@ -30,7 +39,7 @@ export class KodusNotificationClient {
     nextRetryAt?: string;
     updatePaymentUrl?: string;
   }): Promise<void> {
-    await this.post("/billing/webhook/payment-failed", input);
+    await this.post("payment-failed", input);
   }
 
   static async notifyTrialExpiring(input: {
@@ -40,7 +49,7 @@ export class KodusNotificationClient {
     daysRemaining: number;
     upgradeUrl?: string;
   }): Promise<void> {
-    await this.post("/billing/webhook/trial-expiring", input);
+    await this.post("trial-expiring", input);
   }
 
   static async notifyPlanChanged(input: {
@@ -49,7 +58,7 @@ export class KodusNotificationClient {
     planType?: string;
     subscriptionStatus?: string;
   }): Promise<void> {
-    await this.post("/billing/webhook/plan-changed", input);
+    await this.post("plan-changed", input);
   }
 
   /** A credit pack was paid for and applied to the ledger. */
@@ -59,7 +68,7 @@ export class KodusNotificationClient {
     creditUsd: number;
     balanceUsd: number;
   }): Promise<void> {
-    await this.post("/billing/webhook/credits-purchased", input);
+    await this.post("credits-purchased", input);
   }
 
   /** Balance crossed the low threshold (or hit zero: `exhausted`). One shot
@@ -73,14 +82,41 @@ export class KodusNotificationClient {
     /** Set when an automatic top-up was attempted and the card failed. */
     autoTopUpError?: string;
   }): Promise<void> {
-    await this.post("/billing/webhook/credits-low", input);
+    await this.post("credits-low", input);
   }
 
+  /** Served by the kodus-ai API. Never put "webhook" in it: the kodus-ai ALB
+   *  routes every `*\/webhook*` path to its webhooks ingestion service. */
+  private static readonly PATH_PREFIX = "/billing/events";
+
+  /** Pre-kodus-ai#2007 receiver on the webhooks service. Tried once when
+   *  the API rejects the call before its handler runs, so the two deploys
+   *  can land in any order or be rolled back independently. Drop it (and
+   *  FALLBACK_STATUSES) once kodus-ai removes the legacy controller. */
+  private static readonly LEGACY_PATH_PREFIX = "/billing/webhook";
+
+  /** Answers that mean the API handler never ran, so nothing was emitted
+   *  and the legacy receiver can take the same bytes: 404 (route not
+   *  deployed yet), 401 (signature/timestamp rejected, e.g. clock skew on
+   *  this side — the legacy receiver does not read the timestamp), 500 (the
+   *  API's billing secret or raw-body capture is missing) and 502/503 (the
+   *  ALB has no healthy API target during a deploy or crash). 504 stays out
+   *  on purpose: the handler may have run and only the response was lost,
+   *  so a retry could emit twice. */
+  private static readonly FALLBACK_STATUSES = new Set([
+    404, 401, 500, 502, 503,
+  ]);
+
   private static async post(
-    path: string,
+    event: string,
     body: Record<string, unknown>
   ): Promise<void> {
+    let attemptedPath: string | undefined;
     try {
+      const path = `${this.PATH_PREFIX}/${event}`;
+      const legacyPath = `${this.LEGACY_PATH_PREFIX}/${event}`;
+      // Logged instead of the URL: host and port come from the environment.
+      attemptedPath = path;
       const url = buildKodusApiUrl(path);
       if (!url) return; // Integration not configured for this env.
 
@@ -88,25 +124,60 @@ export class KodusNotificationClient {
       if (!secret) return; // No secret — silently skip rather than 401.
 
       const rawBody = JSON.stringify(body);
-      const signature = createHmac("sha256", secret)
-        .update(rawBody)
-        .digest("hex");
+      const timestamp = String(Date.now());
 
-      await axios.post(url, rawBody, {
-        headers: {
-          "Content-Type": "application/json",
-          "x-kodus-signature": signature,
-        },
-        timeout: this.TIMEOUT_MS,
-        // Don't transform — body is already a string and signature is
-        // computed over exactly that string.
-        transformRequest: [(data) => data],
-      });
+      const send = (target: string, headers: Record<string, string>) =>
+        axios.post(target, rawBody, {
+          headers: { "Content-Type": "application/json", ...headers },
+          timeout: this.TIMEOUT_MS,
+          // Don't transform — body is already a string and signature is
+          // computed over exactly that string.
+          transformRequest: [(data) => data],
+        });
+
+      try {
+        await send(url, {
+          [SIGNATURE_HEADER]: sign(
+            secret,
+            signaturePayload("POST", path, "", timestamp, rawBody)
+          ),
+          [TIMESTAMP_HEADER]: timestamp,
+        });
+      } catch (error) {
+        const legacyUrl = buildKodusApiUrl(legacyPath);
+        const status = axios.isAxiosError(error)
+          ? error.response?.status
+          : undefined;
+        if (
+          !legacyUrl ||
+          status === undefined ||
+          !this.FALLBACK_STATUSES.has(status)
+        ) {
+          throw error;
+        }
+        // Keep the primary rejection visible even when the fallback lands.
+        console.warn(
+          `KodusNotificationClient: ${event} rejected by ${path} (${status}), retrying ${legacyPath}`
+        );
+        attemptedPath = legacyPath;
+        // The legacy receiver verifies an HMAC over the body alone.
+        await send(legacyUrl, {
+          [SIGNATURE_HEADER]: createHmac("sha256", secret)
+            .update(rawBody)
+            .digest("hex"),
+        });
+      }
     } catch (error) {
       // Hard rule: never let an outbound notification failure bubble
       // back into Stripe webhook handlers or trial-expiring cron runs.
+      // Log the target and status so a drop is diagnosable.
+      const status = axios.isAxiosError(error)
+        ? error.response?.status
+        : undefined;
       console.error(
-        `KodusNotificationClient: failed to deliver ${path}`,
+        `KodusNotificationClient: failed to deliver ${event} to ${
+          attemptedPath ?? "kodus-ai"
+        } (${status ?? "no response"})`,
         error instanceof Error ? error.message : error
       );
     }
