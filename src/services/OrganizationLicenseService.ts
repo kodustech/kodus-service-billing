@@ -12,6 +12,13 @@ import { UserLicense, GitTool, LicenseStatus } from "../entities/UserLicense";
 import { Between, In, LessThan } from "typeorm";
 import { clearCacheByPrefix } from "../config/utils/cache";
 import { buildLogApiUrl } from "../config/utils/urlBuilder";
+import {
+    SIGNATURE_HEADER,
+    TIMESTAMP_HEADER,
+    WEBHOOK_SECRET_ENV,
+    sign,
+    signaturePayload,
+} from "../config/utils/serviceToken";
 import axios from "axios";
 import { AppDataSource } from "../config/database";
 import { KodusNotificationClient } from "./KodusNotificationClient";
@@ -462,6 +469,15 @@ export class OrganizationLicenseService {
         },
         userName: string,
     ): Promise<void> {
+        // kodus-ai accepts this callback only when signed with the shared
+        // webhook secret, like the /billing/events notifications.
+        const secret = (process.env[WEBHOOK_SECRET_ENV] ?? "").trim();
+        if (!secret) {
+            throw new Error(
+                `${WEBHOOK_SECRET_ENV} is not configured — cannot sign the user status log`,
+            );
+        }
+
         try {
             // Processa cada licença individualmente
             for (const license of userLicenses) {
@@ -475,13 +491,23 @@ export class OrganizationLicenseService {
                     userName,
                 };
 
-                const apiUrl = buildLogApiUrl("/user-log/status-change");
+                const path = "/user-log/status-change";
+                const apiUrl = buildLogApiUrl(path);
+                const rawBody = JSON.stringify(userStatusChange);
+                const timestamp = String(Date.now());
 
-                await axios.post(apiUrl, userStatusChange, {
+                await axios.post(apiUrl, rawBody, {
                     headers: {
                         "Content-Type": "application/json",
+                        [SIGNATURE_HEADER]: sign(
+                            secret,
+                            signaturePayload("POST", path, "", timestamp, rawBody),
+                        ),
+                        [TIMESTAMP_HEADER]: timestamp,
                     },
                     timeout: 3000,
+                    // The signature covers exactly this string.
+                    transformRequest: [(data) => data],
                 });
             }
         } catch (error) {
