@@ -2,6 +2,7 @@ import { AppDataSource } from "../config/database";
 import { clearCacheByPrefix } from "../config/utils/cache";
 import {
   CREDITS_LOW_THRESHOLD_USD,
+  CREDITS_MIN_PURCHASE_USD,
   chargeForCredit,
   roundUsd,
 } from "../config/creditPricing";
@@ -85,6 +86,16 @@ export function isIdempotencyConflict(error: unknown): boolean {
     code === "idempotency_key_in_use"
   );
 }
+
+/**
+ * Why an auto top-up whose saved amount is no longer purchasable (below the
+ * minimum, or not whole dollars, e.g. a config saved when the minimum was
+ * US$10) did not charge.
+ */
+export const autoTopUpInvalidAmountMessage = (amountUsd: number): string =>
+  `Auto top-up skipped: $${roundUsd(amountUsd)} is no longer a valid amount ` +
+  `(whole dollars, minimum $${CREDITS_MIN_PURCHASE_USD}). Update the auto ` +
+  `top-up amount to resume.`;
 
 export const AUTO_TOP_UP_PARKED_MESSAGE =
   "Auto top-up was paused: a previous charge attempt is unresolved at the " +
@@ -304,7 +315,27 @@ export class AutoTopUpService {
       return { charged: false, reason: "NOT_CONFIGURED" };
     }
 
-    const creditUsd = roundUsd(amount);
+    // A saved amount that is no longer purchasable (a config from before the
+    // US$15 minimum, or a fractional one) is SKIPPED with a recorded reason,
+    // never bumped to the minimum: an off-session charge must not exceed what
+    // the customer agreed to. The attempt key is left alone — this attempt
+    // never reached Stripe, but the key may cover an earlier one whose
+    // outcome is unknown. Changing the amount drops it (updateSettings).
+    const creditUsd = CreditService.validatePurchaseAmount(amount);
+    if (creditUsd === null) {
+      const reportedError = autoTopUpInvalidAmountMessage(amount);
+      console.error(
+        `Auto top-up skipped for org ${license.organizationId}: amount ` +
+          `${amount} is not a valid purchase amount`,
+      );
+      await AppDataSource.getRepository(OrganizationLicense).update(
+        { id: license.id },
+        { creditAutoTopUpLastError: reportedError },
+      );
+      clearCacheByPrefix("org-license");
+      this.notifyFailure(license, reportedError);
+      return { charged: false, reason: "INVALID_AMOUNT" };
+    }
     const chargeUsd = chargeForCredit(creditUsd);
     // The debit that claimed this attempt minted the idempotency key under
     // the row lock. It is REUSED across retries until the attempt reaches
@@ -341,6 +372,9 @@ export class AutoTopUpService {
           auto: true,
           stripePaymentIntentId: intent.id,
           chargeUsd,
+          // What was actually charged, in minor units of `currency`.
+          amountMinor: intent.amount,
+          currency: intent.currency,
           paymentMethod: license.creditPaymentMethodLabel,
         },
       });
@@ -381,20 +415,28 @@ export class AutoTopUpService {
         },
       );
       clearCacheByPrefix("org-license");
-      KodusNotificationClient.notifyCreditsLow({
-        organizationId: license.organizationId,
-        teamId: license.teamId,
-        balanceUsd: roundUsd(license.creditBalanceUsd ?? 0),
-        thresholdUsd: CREDITS_LOW_THRESHOLD_USD,
-        exhausted: (license.creditBalanceUsd ?? 0) <= 0,
-        autoTopUpError: reportedError,
-      }).catch(() => {
-        /* client swallows internally */
-      });
+      this.notifyFailure(license, reportedError);
       return {
         charged: false,
         reason: parked ? "PARKED_IDEMPOTENCY_CONFLICT" : message,
       };
     }
+  }
+
+  /** Tell the customer an auto top-up did not happen, and why. */
+  private static notifyFailure(
+    license: OrganizationLicense,
+    reportedError: string,
+  ): void {
+    KodusNotificationClient.notifyCreditsLow({
+      organizationId: license.organizationId,
+      teamId: license.teamId,
+      balanceUsd: roundUsd(license.creditBalanceUsd ?? 0),
+      thresholdUsd: CREDITS_LOW_THRESHOLD_USD,
+      exhausted: (license.creditBalanceUsd ?? 0) <= 0,
+      autoTopUpError: reportedError,
+    }).catch(() => {
+      /* client swallows internally */
+    });
   }
 }

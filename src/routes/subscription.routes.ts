@@ -882,7 +882,7 @@ router.get("/credits/ledger", async (req, res) => {
  *   post:
  *     tags: [Billing]
  *     summary: Create a Stripe checkout for a credit pack
- *     description: One-time Stripe Checkout (mode payment). The customer pays `creditUsd` plus the platform markup; the ledger is credited with `creditUsd` once Stripe reports the session paid.
+ *     description: One-time Stripe Checkout (mode payment) for `creditUsd` units of the multi-currency credit Price (one unit = US$1 of credit, markup included). A customer already billed in a currency pays in it (USD or BRL); a new customer gets the currency Checkout picks from their location. The ledger is credited with `creditUsd` once Stripe reports the session paid, whatever the currency.
  *     operationId: createCreditCheckout
  *     requestBody:
  *       required: true
@@ -919,8 +919,20 @@ router.get("/credits/ledger", async (req, res) => {
  *           application/json:
  *             schema:
  *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "409":
+ *         description: The customer's currency has no option on the credit Price.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
  *       "500":
  *         description: Internal server error.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "503":
+ *         description: Credit purchases are not configured (STRIPE_CREDITS_PRICE_ID missing).
  *         content:
  *           application/json:
  *             schema:

@@ -22,6 +22,7 @@ KEYS=(
     "/prod/kodus-service-billing/STRIPE_PRICE_ID_ENTERPRISE_BYOK_ANNUAL"
     "/prod/kodus-service-billing/STRIPE_PRICE_ID_ENTERPRISE_MANAGED"
     "/prod/kodus-service-billing/STRIPE_PRICE_ID_ENTERPRISE_MANAGED_ANNUAL"
+    "/prod/kodus-service-billing/STRIPE_CREDITS_PRICE_ID"
     "/prod/kodus-service-billing/STRIPE_WEBHOOK_SECRET"
     "/prod/kodus-service-billing/TRIAL_DURATION"
     "/prod/kodus-service-billing/CLOUD_TOKEN_SECRET"

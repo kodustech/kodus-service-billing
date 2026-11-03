@@ -350,7 +350,7 @@ export function buildOpenApiSpec() {
               items: { type: "number" },
               example: [20, 50, 100, 500],
             },
-            minPurchaseUsd: { type: "number", example: 10 },
+            minPurchaseUsd: { type: "number", example: 15 },
             maxPurchaseUsd: { type: "number", example: 5000 },
             lifetimePurchasedUsd: { type: "number", example: 100 },
             lifetimeDebitedUsd: { type: "number", example: 57.483 },
@@ -438,7 +438,7 @@ export function buildOpenApiSpec() {
             creditUsd: {
               type: "number",
               description:
-                "Credit amount to load (USD). A listed pack, or any amount within min/max.",
+                "Credit amount to load, in whole US dollars. A listed pack, or any integer within min/max (minimum 15). Fractional amounts are rejected.",
               example: 100,
             },
           },
@@ -449,7 +449,12 @@ export function buildOpenApiSpec() {
           properties: {
             url: { type: "string", format: "uri" },
             creditUsd: { type: "number", example: 100 },
-            chargeUsd: { type: "number", example: 107 },
+            chargeUsd: {
+              type: "number",
+              description:
+                "USD charge (credit plus markup). A customer billed in BRL pays the credit price's BRL option instead; Checkout shows that amount.",
+              example: 107,
+            },
             markupPct: { type: "number", example: 7 },
           },
         },

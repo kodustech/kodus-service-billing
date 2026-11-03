@@ -168,11 +168,28 @@ describe("validatePurchaseAmount", () => {
   it("accepts listed packs and in-bounds custom amounts, rejects the rest", () => {
     expect(CreditService.validatePurchaseAmount(100)).toBe(100);
     expect(CreditService.validatePurchaseAmount("50")).toBe(50);
-    expect(CreditService.validatePurchaseAmount(37.5)).toBe(37.5);
+    expect(CreditService.validatePurchaseAmount(37)).toBe(37);
     expect(CreditService.validatePurchaseAmount(1)).toBeNull();
     expect(CreditService.validatePurchaseAmount(1_000_000)).toBeNull();
     expect(CreditService.validatePurchaseAmount("abc")).toBeNull();
     expect(CreditService.validatePurchaseAmount(undefined)).toBeNull();
+  });
+
+  it("sets the minimum at US$15: below it a sale loses money on card fees", () => {
+    expect(CreditService.validatePurchaseAmount(15)).toBe(15);
+    expect(CreditService.validatePurchaseAmount("15")).toBe(15);
+    expect(CreditService.validatePurchaseAmount(14)).toBeNull();
+    expect(CreditService.validatePurchaseAmount(10)).toBeNull();
+  });
+
+  it("takes whole dollars only, rejecting (never rounding) a fractional amount", () => {
+    // The amount is the quantity of a US$1 Stripe Price; rounding would
+    // charge something other than what the customer typed.
+    expect(CreditService.validatePurchaseAmount(37.5)).toBeNull();
+    expect(CreditService.validatePurchaseAmount("20.01")).toBeNull();
+    expect(CreditService.validatePurchaseAmount(15.99)).toBeNull();
+    expect(CreditService.validatePurchaseAmount(5000)).toBe(5000);
+    expect(CreditService.validatePurchaseAmount(5001)).toBeNull();
   });
 });
 

@@ -31,11 +31,12 @@ jest.mock("./StripeService", () => ({
 jest.mock("./CreditService", () => ({
   CreditService: {
     applyPurchase: jest.fn(),
+    // Mirrors the real rule: whole dollars, a pack or 15..5000.
     validatePurchaseAmount: (n: unknown) => {
       const v = Number(n);
-      if (!Number.isFinite(v)) return null;
+      if (!Number.isInteger(v)) return null;
       if ([20, 50, 100, 500].includes(v)) return v;
-      return v >= 10 && v <= 5000 ? v : null;
+      return v >= 15 && v <= 5000 ? v : null;
     },
   },
 }));
@@ -44,6 +45,7 @@ import {
   AUTO_TOP_UP_PARKED_MESSAGE,
   AUTO_TOP_UP_RETRY_MS,
   AutoTopUpService,
+  autoTopUpInvalidAmountMessage,
   decideAutoTopUp,
 } from "./AutoTopUpService";
 import { CreditService } from "./CreditService";
@@ -209,6 +211,8 @@ describe("charge — the off-session purchase", () => {
     (StripeService.chargeSavedPaymentMethod as jest.Mock).mockResolvedValue({
       id: "pi_1",
       status: "succeeded",
+      amount: 5350,
+      currency: "usd",
     });
     (CreditService.applyPurchase as jest.Mock).mockResolvedValue({
       applied: true,
@@ -231,7 +235,13 @@ describe("charge — the off-session purchase", () => {
         organizationId: "org-1",
         creditUsd: 50,
         usageKey: "stripe:pi:pi_1",
-        metadata: expect.objectContaining({ auto: true, chargeUsd: 53.5 }),
+        metadata: expect.objectContaining({
+          auto: true,
+          chargeUsd: 53.5,
+          // What was actually charged, in the customer's currency.
+          amountMinor: 5350,
+          currency: "usd",
+        }),
       }),
     );
     // A charge that went through is definitive: release the key so the
@@ -284,6 +294,96 @@ describe("charge — the off-session purchase", () => {
     const r = await AutoTopUpService.charge("lic-1");
     expect(r.charged).toBe(false);
     expect(CreditService.applyPurchase).not.toHaveBeenCalled();
+  });
+
+  it("records the presentment currency of a BRL charge on the ledger entry", async () => {
+    licenseRepo.findOne.mockResolvedValue(license());
+    (StripeService.chargeSavedPaymentMethod as jest.Mock).mockResolvedValue({
+      id: "pi_brl",
+      status: "succeeded",
+      amount: 29100, // 50 × R$5.82
+      currency: "brl",
+    });
+    (CreditService.applyPurchase as jest.Mock).mockResolvedValue({
+      applied: true,
+      balanceUsd: 53,
+    });
+
+    const r = await AutoTopUpService.charge("lic-1");
+
+    // The ledger is still credited in USD, whatever was charged.
+    expect(r).toEqual({ charged: true, creditUsd: 50, balanceUsd: 53 });
+    expect(CreditService.applyPurchase).toHaveBeenCalledWith(
+      expect.objectContaining({
+        creditUsd: 50,
+        metadata: expect.objectContaining({
+          amountMinor: 29100,
+          currency: "brl",
+        }),
+      }),
+    );
+  });
+
+  it("SKIPS a saved amount below the new US$15 minimum instead of charging more than agreed", async () => {
+    // A config saved when the minimum was US$10. Bumping it to 15 would be
+    // an off-session charge the customer never agreed to; skipping costs
+    // only a top-up, and the recorded reason tells them how to resume.
+    licenseRepo.findOne.mockResolvedValue(
+      license({ creditAutoTopUpAmountUsd: 10, creditBalanceUsd: 1 }),
+    );
+
+    const r = await AutoTopUpService.charge("lic-1");
+
+    expect(r).toEqual({ charged: false, reason: "INVALID_AMOUNT" });
+    expect(StripeService.chargeSavedPaymentMethod).not.toHaveBeenCalled();
+    expect(CreditService.applyPurchase).not.toHaveBeenCalled();
+    // Only the reason is written: the attempt key may cover an earlier
+    // attempt whose outcome is unknown, so it is not released here.
+    expect(licenseUpdate).toHaveBeenCalledWith(
+      { id: "lic-1" },
+      { creditAutoTopUpLastError: autoTopUpInvalidAmountMessage(10) },
+    );
+    expect(autoTopUpInvalidAmountMessage(10)).toContain("minimum $15");
+    expect(KodusNotificationClient.notifyCreditsLow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        organizationId: "org-1",
+        autoTopUpError: autoTopUpInvalidAmountMessage(10),
+      }),
+    );
+  });
+
+  it("SKIPS a fractional saved amount (credits are whole dollars)", async () => {
+    licenseRepo.findOne.mockResolvedValue(
+      license({ creditAutoTopUpAmountUsd: 37.5 }),
+    );
+    const r = await AutoTopUpService.charge("lic-1");
+    expect(r).toEqual({ charged: false, reason: "INVALID_AMOUNT" });
+    expect(StripeService.chargeSavedPaymentMethod).not.toHaveBeenCalled();
+  });
+
+  it("records a currency the credit price is not sold in, without charging another one", async () => {
+    licenseRepo.findOne.mockResolvedValue(license());
+    const message =
+      "Credits cannot be charged in EUR: the credit price price_x has no EUR currency option.";
+    (StripeService.chargeSavedPaymentMethod as jest.Mock).mockRejectedValue(
+      Object.assign(new Error(message), {
+        code: "CREDIT_CURRENCY_NOT_SUPPORTED",
+      }),
+    );
+
+    const r = await AutoTopUpService.charge("lic-1");
+
+    expect(r).toEqual({ charged: false, reason: message });
+    expect(CreditService.applyPurchase).not.toHaveBeenCalled();
+    // Recorded like any failure. The key stays: it may cover an earlier
+    // attempt that reached Stripe.
+    expect(licenseUpdate).toHaveBeenCalledWith(
+      { id: "lic-1" },
+      { creditAutoTopUpLastError: message },
+    );
+    expect(KodusNotificationClient.notifyCreditsLow).toHaveBeenCalledWith(
+      expect.objectContaining({ autoTopUpError: message }),
+    );
   });
 
   it("does nothing when the org turned it off between the claim and the charge", async () => {

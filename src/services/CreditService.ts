@@ -89,15 +89,19 @@ type NotifyDecision = {
  * usageKey). A duplicate insert raises 23505 and is counted as `skipped`.
  */
 export class CreditService {
-  /** Validate a purchase amount: a listed pack, or a custom amount in bounds. */
+  /**
+   * Validate a purchase amount: a listed pack, or a custom amount in bounds.
+   * Whole dollars only — the amount is the quantity of a US$1 Stripe Price —
+   * so a fractional amount is REJECTED rather than rounded: rounding would
+   * charge the customer something other than what they typed.
+   */
   static validatePurchaseAmount(amountUsd: unknown): number | null {
     const n = Number(amountUsd);
-    if (!Number.isFinite(n)) return null;
-    const rounded = Math.round(n * 100) / 100;
-    if (CREDIT_PACKS_USD.includes(rounded)) return rounded;
-    if (rounded < CREDITS_MIN_PURCHASE_USD) return null;
-    if (rounded > CREDITS_MAX_PURCHASE_USD) return null;
-    return rounded;
+    if (!Number.isInteger(n)) return null;
+    if (CREDIT_PACKS_USD.includes(n)) return n;
+    if (n < CREDITS_MIN_PURCHASE_USD) return null;
+    if (n > CREDITS_MAX_PURCHASE_USD) return null;
+    return n;
   }
 
   static async getBalance(
@@ -522,7 +526,8 @@ export class CreditService {
     return outcome;
   }
 
-  /** The Stripe charge (USD) for a credit amount — surfaced to the UI. */
+  /** The USD charge for a credit amount — surfaced to the UI. A BRL customer
+   *  pays the Price's BRL option instead; Checkout shows that amount. */
   static quote(creditUsd: number): {
     creditUsd: number;
     chargeUsd: number;
