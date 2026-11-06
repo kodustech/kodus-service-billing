@@ -623,13 +623,19 @@ export class SubscriptionController {
         } catch (error) {
             const code = (error as { code?: string } | null)?.code;
             if (code === "CREDITS_PRICE_NOT_CONFIGURED") {
-                console.error("Checkout de créditos indisponível:", error);
+                console.error(
+                    "Checkout de créditos indisponível:",
+                    (error as Error).message,
+                );
                 return res.status(503).json({
                     error: "Compra de créditos indisponível: preço não configurado",
                 });
             }
             if (code === "CREDIT_CURRENCY_NOT_SUPPORTED") {
-                console.error("Moeda do cliente sem preço de créditos:", error);
+                console.error(
+                    "Moeda do cliente sem preço de créditos:",
+                    (error as Error).message,
+                );
                 return res.status(409).json({
                     error: (error as Error).message,
                 });

@@ -47,6 +47,7 @@ jest.mock("stripe", () =>
 const mockLicenseRepo = {
   findOne: jest.fn(),
   save: jest.fn(async (x: unknown) => x),
+  update: jest.fn(),
 };
 jest.mock("../repositories/OrganizationLicenseRepository", () => ({
   OrganizationLicenseRepository: mockLicenseRepo,
@@ -66,7 +67,6 @@ jest.mock("./AutoTopUpService", () => ({
 
 import {
   CreditCurrencyNotSupportedError,
-  CREDITS_CURRENCY_METADATA_KEY,
   StripeService,
   creditUnitAmount,
 } from "./StripeService";
@@ -108,6 +108,7 @@ beforeAll(() => {
 beforeEach(() => {
   for (const fn of Object.values(mockStripe)) fn.mockReset();
   mockLicenseRepo.findOne.mockReset();
+  mockLicenseRepo.update.mockReset().mockResolvedValue({ affected: 1 });
   mockApplyPurchase.mockReset();
   mockAttachPaymentMethod.mockReset();
   process.env.STRIPE_CREDITS_PRICE_ID = PRICE_ID;
@@ -175,10 +176,10 @@ describe("credit Checkout — currency selection", () => {
   });
 
   it("keeps a credit-only customer in the currency of their last purchase", async () => {
-    mockLicenseRepo.findOne.mockResolvedValue(license());
-    mockStripe.customersRetrieve.mockResolvedValue(
-      customer({ metadata: { [CREDITS_CURRENCY_METADATA_KEY]: "brl" } }),
+    mockLicenseRepo.findOne.mockResolvedValue(
+      license({ creditCurrency: "brl" }),
     );
+    mockStripe.customersRetrieve.mockResolvedValue(customer());
 
     await StripeService.createCreditCheckoutSession("org-1", "team-1", 50);
 
@@ -247,23 +248,21 @@ describe("credit Checkout — line items and metadata", () => {
 });
 
 describe("auto top-up — charged in the customer's currency", () => {
-  const charge = (creditUsd = 50) =>
-    StripeService.chargeSavedPaymentMethod({
-      license: license() as any,
+  const request = (creditUsd = 50, over: Record<string, unknown> = {}) =>
+    StripeService.autoTopUpRequest({
+      license: license(over) as any,
       paymentMethodId: "pm_1",
       creditUsd,
       chargeUsd: Math.round(creditUsd * 107) / 100,
-      idempotencyKey: "auto-topup:lic-1:1",
     });
 
-  it("charges a USD customer creditUsd × the Price's default unit amount", async () => {
+  it("prices a USD customer at creditUsd × the Price's default unit amount", async () => {
     mockStripe.customersRetrieve.mockResolvedValue(
       customer({ currency: "usd" }),
     );
 
-    await charge(50);
+    const params = await request(50);
 
-    const [params, opts] = mockStripe.paymentIntentsCreate.mock.calls[0];
     expect(params.currency).toBe("usd");
     expect(params.amount).toBe(5350); // 50 × 107
     expect(params.metadata).toEqual(
@@ -273,63 +272,59 @@ describe("auto top-up — charged in the customer's currency", () => {
         priceId: PRICE_ID,
       }),
     );
-    expect(opts).toEqual({ idempotencyKey: "auto-topup:lic-1:1" });
+    // Only builds it: the caller stores it under the key, then sends it.
+    expect(mockStripe.paymentIntentsCreate).not.toHaveBeenCalled();
   });
 
-  it("charges a BRL customer creditUsd × the BRL currency option", async () => {
+  it("prices a BRL customer at creditUsd × the BRL currency option", async () => {
     mockStripe.customersRetrieve.mockResolvedValue(
       customer({ currency: "brl" }),
     );
 
-    await charge(50);
+    const params = await request(50);
 
-    const [params] = mockStripe.paymentIntentsCreate.mock.calls[0];
     expect(params.currency).toBe("brl");
     expect(params.amount).toBe(29100); // 50 × 582
   });
 
-  it("charges a credit-only customer in the currency of their last purchase", async () => {
-    mockStripe.customersRetrieve.mockResolvedValue(
-      customer({ metadata: { [CREDITS_CURRENCY_METADATA_KEY]: "brl" } }),
-    );
+  it("prices a credit-only customer in the currency of their last purchase", async () => {
+    // Stripe has no currency for them; the license recorded BRL when their
+    // pack was paid, so their top-up is BRL 29100, not USD 5350.
+    mockStripe.customersRetrieve.mockResolvedValue(customer());
 
-    await charge(20);
+    const params = await request(50, { creditCurrency: "brl" });
 
-    const [params] = mockStripe.paymentIntentsCreate.mock.calls[0];
     expect(params.currency).toBe("brl");
-    expect(params.amount).toBe(11640);
+    expect(params.amount).toBe(29100);
   });
 
   it("falls back to the Price's default currency when the customer has none", async () => {
     mockStripe.customersRetrieve.mockResolvedValue(customer());
 
-    await charge(15);
+    const params = await request(15);
 
-    const [params] = mockStripe.paymentIntentsCreate.mock.calls[0];
     expect(params.currency).toBe("usd");
     expect(params.amount).toBe(1605);
   });
 
-  it("refuses to charge a currency the Price has no option for", async () => {
+  it("refuses a currency the Price has no option for", async () => {
     mockStripe.customersRetrieve.mockResolvedValue(
       customer({ currency: "eur" }),
     );
 
-    const err = await charge(50).catch((e) => e);
+    const err = await request(50).catch((e) => e);
 
     expect(err).toBeInstanceOf(CreditCurrencyNotSupportedError);
     expect(err.code).toBe("CREDIT_CURRENCY_NOT_SUPPORTED");
     expect(err.message).toContain("EUR");
-    expect(mockStripe.paymentIntentsCreate).not.toHaveBeenCalled();
   });
 
-  it("refuses to charge when STRIPE_CREDITS_PRICE_ID is missing", async () => {
+  it("refuses when STRIPE_CREDITS_PRICE_ID is missing", async () => {
     delete process.env.STRIPE_CREDITS_PRICE_ID;
 
-    await expect(charge(50)).rejects.toBeInstanceOf(
+    await expect(request(50)).rejects.toBeInstanceOf(
       CreditsPriceNotConfiguredError,
     );
-    expect(mockStripe.paymentIntentsCreate).not.toHaveBeenCalled();
   });
 
   it("reads the Price once, with its currency options, and caches it", async () => {
@@ -337,13 +332,55 @@ describe("auto top-up — charged in the customer's currency", () => {
       customer({ currency: "brl" }),
     );
 
-    await charge(50);
-    await charge(20);
+    await request(50);
+    await request(20);
 
     expect(mockStripe.pricesRetrieve).toHaveBeenCalledTimes(1);
     expect(mockStripe.pricesRetrieve).toHaveBeenCalledWith(PRICE_ID, {
       expand: ["currency_options"],
     });
+  });
+
+  it("sends a request as given, under the attempt's key", async () => {
+    const params = { amount: 5350, currency: "usd" } as any;
+
+    await StripeService.createAutoTopUpIntent(params, "auto-topup:v2:lic-1:1");
+
+    expect(mockStripe.paymentIntentsCreate).toHaveBeenCalledWith(params, {
+      idempotencyKey: "auto-topup:v2:lic-1:1",
+    });
+  });
+
+  it("rebuilds a pre-Price attempt exactly as the previous version sent it", async () => {
+    // Literal: Stripe compares a reused key's parameters with what it got
+    // the first time, so this is the base version's request, field for field.
+    const params = await StripeService.legacyAutoTopUpRequest({
+      license: license() as any,
+      paymentMethodId: "pm_1",
+      creditUsd: 10,
+      chargeUsd: 10.7,
+    });
+
+    expect(params).toEqual({
+      amount: 1070,
+      currency: "usd",
+      customer: "cus_1",
+      payment_method: "pm_1",
+      off_session: true,
+      confirm: true,
+      description:
+        "Kodus credits auto top-up — $10.00 (includes 7% platform fee)",
+      metadata: {
+        kind: "credit_auto_topup",
+        organizationId: "org-1",
+        teamId: "team-1",
+        creditUsd: "10",
+        chargeUsd: "10.7",
+        markupPct: "7",
+      },
+    });
+    expect(mockStripe.pricesRetrieve).not.toHaveBeenCalled();
+    expect(mockStripe.customersRetrieve).not.toHaveBeenCalled();
   });
 });
 
@@ -419,23 +456,30 @@ describe("webhook — a credit pack paid in BRL", () => {
         currency: "brl",
       }),
     });
-    // Later auto top-ups for this customer stay in BRL.
-    expect(mockStripe.customersUpdate).toHaveBeenCalledWith("cus_1", {
-      metadata: { [CREDITS_CURRENCY_METADATA_KEY]: "brl" },
-    });
+    // Later auto top-ups for this customer stay in BRL: recorded on the
+    // license, after the credit.
+    expect(mockLicenseRepo.update).toHaveBeenCalledWith(
+      { id: "lic-1" },
+      { creditCurrency: "brl" },
+    );
+    expect(mockApplyPurchase.mock.invocationCallOrder[0]).toBeLessThan(
+      mockLicenseRepo.update.mock.invocationCallOrder[0],
+    );
+    expect(mockStripe.customersUpdate).not.toHaveBeenCalled();
     expect(mockAttachPaymentMethod).toHaveBeenCalled();
   });
 
-  it("still credits the purchase if recording the currency fails", async () => {
+  it("credits the purchase, then fails the webhook if the currency cannot be recorded, so Stripe redelivers it", async () => {
+    // Swallowing this left a BRL credit-only customer with no record of
+    // their currency, and their next auto top-up went out in USD.
     mockLicenseRepo.findOne.mockResolvedValue(license());
-    mockStripe.customersUpdate.mockRejectedValue(new Error("stripe down"));
+    mockLicenseRepo.update.mockRejectedValue(new Error("db down"));
     mockStripe.paymentIntentsRetrieve.mockResolvedValue({
       id: "pi_brl",
       payment_method: null,
     });
-    const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
 
-    await StripeService.handleWebhookEvent({
+    const delivered = StripeService.handleWebhookEvent({
       type: "checkout.session.completed",
       data: {
         object: {
@@ -455,9 +499,11 @@ describe("webhook — a credit pack paid in BRL", () => {
       },
     } as any);
 
+    await expect(delivered).rejects.toThrow("db down");
+    // Credited first; the redelivery skips it as already applied (same
+    // usageKey) and retries the write.
     expect(mockApplyPurchase).toHaveBeenCalledWith(
       expect.objectContaining({ creditUsd: 15, usageKey: "stripe:checkout:cs_brl_2" }),
     );
-    errorSpy.mockRestore();
   });
 });

@@ -1,3 +1,5 @@
+import type Stripe from "stripe";
+
 import { AppDataSource } from "../config/database";
 import { clearCacheByPrefix } from "../config/utils/cache";
 import {
@@ -96,6 +98,20 @@ export const autoTopUpInvalidAmountMessage = (amountUsd: number): string =>
   `Auto top-up skipped: $${roundUsd(amountUsd)} is no longer a valid amount ` +
   `(whole dollars, minimum $${CREDITS_MIN_PURCHASE_USD}). Update the auto ` +
   `top-up amount to resume.`;
+
+/**
+ * The idempotency key a debit mints for a new auto top-up attempt. The `v2`
+ * marks an attempt whose request is stored before it is sent
+ * (`creditAutoTopUpAttemptRequest`); a key without it was claimed by the
+ * version that priced every retry afresh, see `isPreStoredRequestKey`.
+ */
+export const autoTopUpAttemptKey = (licenseId: string, now: Date): string =>
+  `auto-topup:v2:${licenseId}:${now.getTime()}`;
+
+/** A key claimed before requests were stored: if it reached Stripe, it went
+ *  out as `StripeService.legacyAutoTopUpRequest` builds it. */
+export const isPreStoredRequestKey = (key: string): boolean =>
+  !key.startsWith("auto-topup:v2:");
 
 export const AUTO_TOP_UP_PARKED_MESSAGE =
   "Auto top-up was paused: a previous charge attempt is unresolved at the " +
@@ -315,28 +331,6 @@ export class AutoTopUpService {
       return { charged: false, reason: "NOT_CONFIGURED" };
     }
 
-    // A saved amount that is no longer purchasable (a config from before the
-    // US$15 minimum, or a fractional one) is SKIPPED with a recorded reason,
-    // never bumped to the minimum: an off-session charge must not exceed what
-    // the customer agreed to. The attempt key is left alone — this attempt
-    // never reached Stripe, but the key may cover an earlier one whose
-    // outcome is unknown. Changing the amount drops it (updateSettings).
-    const creditUsd = CreditService.validatePurchaseAmount(amount);
-    if (creditUsd === null) {
-      const reportedError = autoTopUpInvalidAmountMessage(amount);
-      console.error(
-        `Auto top-up skipped for org ${license.organizationId}: amount ` +
-          `${amount} is not a valid purchase amount`,
-      );
-      await AppDataSource.getRepository(OrganizationLicense).update(
-        { id: license.id },
-        { creditAutoTopUpLastError: reportedError },
-      );
-      clearCacheByPrefix("org-license");
-      this.notifyFailure(license, reportedError);
-      return { charged: false, reason: "INVALID_AMOUNT" };
-    }
-    const chargeUsd = chargeForCredit(creditUsd);
     // The debit that claimed this attempt minted the idempotency key under
     // the row lock. It is REUSED across retries until the attempt reaches
     // a definitive outcome, which is the whole point: after a Stripe
@@ -352,14 +346,85 @@ export class AutoTopUpService {
       );
       return { charged: false, reason: "NO_ATTEMPT_CLAIMED" };
     }
+
+    // Stripe accepts a reused key only with IDENTICAL parameters. A retry
+    // therefore replays the request stored for this key rather than pricing
+    // it again: the Price, the markup or the customer's currency may have
+    // moved since, and a refused key parks the attempt without crediting a
+    // charge that may already be captured. A key claimed before requests
+    // were stored is replayed as that version sent it.
+    const stored = license.creditAutoTopUpAttemptRequest;
+    let prepare: () => Promise<Stripe.PaymentIntentCreateParams>;
+    if (stored?.key === idempotencyKey) {
+      prepare = async () => stored.params;
+    } else if (isPreStoredRequestKey(idempotencyKey)) {
+      const creditUsd = roundUsd(amount);
+      prepare = () =>
+        StripeService.legacyAutoTopUpRequest({
+          license,
+          paymentMethodId: pm,
+          creditUsd,
+          chargeUsd: chargeForCredit(creditUsd),
+        });
+    } else {
+      // A saved amount that is no longer purchasable (a config from before
+      // the US$15 minimum, or a fractional one) is SKIPPED with a recorded
+      // reason, never bumped to the minimum: an off-session charge must not
+      // exceed what the customer agreed to. The attempt key is left alone;
+      // changing the amount drops it (updateSettings).
+      const creditUsd = CreditService.validatePurchaseAmount(amount);
+      if (creditUsd === null) {
+        const reportedError = autoTopUpInvalidAmountMessage(amount);
+        console.error(
+          `Auto top-up skipped for org ${license.organizationId}: amount ` +
+            `${amount} is not a valid purchase amount`,
+        );
+        await AppDataSource.getRepository(OrganizationLicense).update(
+          { id: license.id },
+          { creditAutoTopUpLastError: reportedError },
+        );
+        clearCacheByPrefix("org-license");
+        this.notifyFailure(license, reportedError);
+        return { charged: false, reason: "INVALID_AMOUNT" };
+      }
+      prepare = () =>
+        StripeService.autoTopUpRequest({
+          license,
+          paymentMethodId: pm,
+          chargeUsd: chargeForCredit(creditUsd),
+          creditUsd,
+        });
+    }
+
     try {
-      const intent = await StripeService.chargeSavedPaymentMethod({
-        license,
-        paymentMethodId: pm,
-        chargeUsd,
-        creditUsd,
+      const request = await prepare();
+      if (stored?.key !== idempotencyKey) {
+        // Stored BEFORE it is sent, so a timeout leaves the exact request
+        // behind for the retry. Only while this attempt still holds the
+        // key: a settings change that dropped it means the attempt is over.
+        const written = await AppDataSource.getRepository(
+          OrganizationLicense,
+        ).update(
+          { id: license.id, creditAutoTopUpAttemptKey: idempotencyKey },
+          {
+            creditAutoTopUpAttemptRequest: {
+              key: idempotencyKey,
+              params: request,
+            },
+          },
+        );
+        if (written?.affected === 0) {
+          return { charged: false, reason: "ATTEMPT_SUPERSEDED" };
+        }
+      }
+      // What this attempt buys comes from its own request, not from the
+      // settings now: a replay credits what was charged.
+      const creditUsd = Number(request.metadata?.creditUsd);
+      const chargeUsd = Number(request.metadata?.chargeUsd);
+      const intent = await StripeService.createAutoTopUpIntent(
+        request,
         idempotencyKey,
-      });
+      );
       if (intent.status !== "succeeded") {
         throw new Error(`payment_intent ${intent.id} is ${intent.status}`);
       }
@@ -382,7 +447,11 @@ export class AutoTopUpService {
       // fresh one.
       await AppDataSource.getRepository(OrganizationLicense).update(
         { id: license.id },
-        { creditAutoTopUpLastError: null, creditAutoTopUpAttemptKey: null },
+        {
+          creditAutoTopUpLastError: null,
+          creditAutoTopUpAttemptKey: null,
+          creditAutoTopUpAttemptRequest: null,
+        },
       );
       clearCacheByPrefix("org-license");
       return { charged: true, creditUsd, balanceUsd: applied.balanceUsd };
@@ -410,7 +479,12 @@ export class AutoTopUpService {
         { id: license.id },
         {
           creditAutoTopUpLastError: reportedError,
-          ...(definitive ? { creditAutoTopUpAttemptKey: null } : {}),
+          ...(definitive
+            ? {
+                creditAutoTopUpAttemptKey: null,
+                creditAutoTopUpAttemptRequest: null,
+              }
+            : {}),
           ...(parked ? { creditAutoTopUpEnabled: false } : {}),
         },
       );

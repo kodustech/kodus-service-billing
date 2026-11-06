@@ -67,6 +67,8 @@ jest.mock("./AutoTopUpService", () => ({
     charge: jest.fn(async () => ({ charged: true })),
   },
   decideAutoTopUp: jest.fn(() => autoTopUpDecision.value),
+  autoTopUpAttemptKey: (licenseId: string, now: Date) =>
+    `auto-topup:v2:${licenseId}:${now.getTime()}`,
 }));
 jest.mock("./KodusNotificationClient", () => ({
   KodusNotificationClient: {
@@ -123,7 +125,7 @@ describe("debit — auto top-up claim", () => {
     // The Stripe idempotency key is minted HERE, under the lock, so every
     // retry of this attempt presents the same one.
     expect(lic.creditAutoTopUpAttemptKey).toBe(
-      `auto-topup:lic-1:${lic.creditAutoTopUpLastAt!.getTime()}`,
+      `auto-topup:v2:lic-1:${lic.creditAutoTopUpLastAt!.getTime()}`,
     );
     expect(licenseRepo.save).toHaveBeenCalled();
     await new Promise((r) => setImmediate(r));
@@ -149,7 +151,7 @@ describe("debit — auto top-up claim", () => {
     // new key, or Stripe would charge a captured payment twice.
     const lic = license({
       creditBalanceUsd: 4,
-      creditAutoTopUpAttemptKey: "auto-topup:lic-1:111",
+      creditAutoTopUpAttemptKey: "auto-topup:v2:lic-1:111",
     });
     licenseRepo.findOne.mockResolvedValue(lic);
     autoTopUpDecision.value = true;
@@ -160,7 +162,7 @@ describe("debit — auto top-up claim", () => {
       entries: [{ usageKey: "span:3", amountUsd: 1 }],
     });
 
-    expect(lic.creditAutoTopUpAttemptKey).toBe("auto-topup:lic-1:111");
+    expect(lic.creditAutoTopUpAttemptKey).toBe("auto-topup:v2:lic-1:111");
   });
 });
 

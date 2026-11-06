@@ -22,9 +22,27 @@ jest.mock("./KodusNotificationClient", () => ({
     notifyCreditsLow: jest.fn(async () => undefined),
   },
 }));
+/** What `StripeService.autoTopUpRequest` returns, minus the Stripe calls. */
+const fakeRequest = (i: { creditUsd: number; chargeUsd: number }) => ({
+  amount: Math.round(i.chargeUsd * 100),
+  currency: "usd",
+  customer: "cus_1",
+  payment_method: "pm_123",
+  off_session: true,
+  confirm: true,
+  metadata: {
+    kind: "credit_auto_topup",
+    creditUsd: String(i.creditUsd),
+    chargeUsd: String(i.chargeUsd),
+    priceId: "price_credits",
+  },
+});
+
 jest.mock("./StripeService", () => ({
   StripeService: {
-    chargeSavedPaymentMethod: jest.fn(),
+    autoTopUpRequest: jest.fn(),
+    legacyAutoTopUpRequest: jest.fn(),
+    createAutoTopUpIntent: jest.fn(),
     detachPaymentMethod: jest.fn(async () => undefined),
   },
 }));
@@ -45,7 +63,6 @@ import {
   AUTO_TOP_UP_PARKED_MESSAGE,
   AUTO_TOP_UP_RETRY_MS,
   AutoTopUpService,
-  autoTopUpInvalidAmountMessage,
   decideAutoTopUp,
 } from "./AutoTopUpService";
 import { CreditService } from "./CreditService";
@@ -68,7 +85,7 @@ const license = (over: Record<string, unknown> = {}) => ({
   creditAutoTopUpLastError: null,
   // A charge only ever runs after a debit claimed the attempt and minted
   // this key under the row lock.
-  creditAutoTopUpAttemptKey: "auto-topup:lic-1:1789000000000",
+  creditAutoTopUpAttemptKey: "auto-topup:v2:lic-1:1789000000000",
   ...over,
 });
 
@@ -76,7 +93,16 @@ beforeEach(() => {
   licenseRepo.findOne.mockReset();
   licenseRepo.save.mockClear();
   licenseUpdate.mockClear();
-  (StripeService.chargeSavedPaymentMethod as jest.Mock).mockReset();
+  (StripeService.createAutoTopUpIntent as jest.Mock).mockReset();
+  (StripeService.autoTopUpRequest as jest.Mock)
+    .mockReset()
+    .mockImplementation(async (i) => fakeRequest(i));
+  (StripeService.legacyAutoTopUpRequest as jest.Mock)
+    .mockReset()
+    .mockImplementation(async (i) => {
+      const { priceId: _, ...metadata } = fakeRequest(i).metadata;
+      return { ...fakeRequest(i), metadata };
+    });
   (StripeService.detachPaymentMethod as jest.Mock).mockClear();
   (CreditService.applyPurchase as jest.Mock).mockReset();
   (KodusNotificationClient.notifyCreditsLow as jest.Mock).mockClear();
@@ -208,7 +234,7 @@ describe("charge — the off-session purchase", () => {
     licenseRepo.findOne.mockResolvedValue(
       license({ creditAutoTopUpLastError: "old" }),
     );
-    (StripeService.chargeSavedPaymentMethod as jest.Mock).mockResolvedValue({
+    (StripeService.createAutoTopUpIntent as jest.Mock).mockResolvedValue({
       id: "pi_1",
       status: "succeeded",
       amount: 5350,
@@ -222,13 +248,16 @@ describe("charge — the off-session purchase", () => {
     const r = await AutoTopUpService.charge("lic-1");
 
     expect(r).toEqual({ charged: true, creditUsd: 50, balanceUsd: 53 });
-    expect(StripeService.chargeSavedPaymentMethod).toHaveBeenCalledWith(
+    expect(StripeService.autoTopUpRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         paymentMethodId: "pm_123",
         creditUsd: 50,
         chargeUsd: 53.5, // 7% markup
-        idempotencyKey: "auto-topup:lic-1:1789000000000",
       }),
+    );
+    expect(StripeService.createAutoTopUpIntent).toHaveBeenCalledWith(
+      fakeRequest({ creditUsd: 50, chargeUsd: 53.5 }),
+      "auto-topup:v2:lic-1:1789000000000",
     );
     expect(CreditService.applyPurchase).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -248,7 +277,11 @@ describe("charge — the off-session purchase", () => {
     // NEXT dip mints a fresh one.
     expect(licenseUpdate).toHaveBeenCalledWith(
       { id: "lic-1" },
-      { creditAutoTopUpLastError: null, creditAutoTopUpAttemptKey: null },
+      {
+        creditAutoTopUpLastError: null,
+        creditAutoTopUpAttemptKey: null,
+        creditAutoTopUpAttemptRequest: null,
+      },
     );
   });
 
@@ -256,7 +289,7 @@ describe("charge — the off-session purchase", () => {
     licenseRepo.findOne.mockResolvedValue(license({ creditBalanceUsd: 0 }));
     // What Stripe actually throws for a decline: a typed error with a code,
     // not a bare Error carrying prose.
-    (StripeService.chargeSavedPaymentMethod as jest.Mock).mockRejectedValue(
+    (StripeService.createAutoTopUpIntent as jest.Mock).mockRejectedValue(
       Object.assign(new Error("Your card was declined."), {
         type: "StripeCardError",
         code: "card_declined",
@@ -274,6 +307,7 @@ describe("charge — the off-session purchase", () => {
       {
         creditAutoTopUpLastError: "Your card was declined.",
         creditAutoTopUpAttemptKey: null,
+        creditAutoTopUpAttemptRequest: null,
       },
     );
     expect(KodusNotificationClient.notifyCreditsLow).toHaveBeenCalledWith(
@@ -287,7 +321,7 @@ describe("charge — the off-session purchase", () => {
 
   it("treats a non-succeeded intent (needs authentication) as a failure", async () => {
     licenseRepo.findOne.mockResolvedValue(license());
-    (StripeService.chargeSavedPaymentMethod as jest.Mock).mockResolvedValue({
+    (StripeService.createAutoTopUpIntent as jest.Mock).mockResolvedValue({
       id: "pi_2",
       status: "requires_action",
     });
@@ -298,7 +332,7 @@ describe("charge — the off-session purchase", () => {
 
   it("records the presentment currency of a BRL charge on the ledger entry", async () => {
     licenseRepo.findOne.mockResolvedValue(license());
-    (StripeService.chargeSavedPaymentMethod as jest.Mock).mockResolvedValue({
+    (StripeService.createAutoTopUpIntent as jest.Mock).mockResolvedValue({
       id: "pi_brl",
       status: "succeeded",
       amount: 29100, // 50 × R$5.82
@@ -335,19 +369,23 @@ describe("charge — the off-session purchase", () => {
     const r = await AutoTopUpService.charge("lic-1");
 
     expect(r).toEqual({ charged: false, reason: "INVALID_AMOUNT" });
-    expect(StripeService.chargeSavedPaymentMethod).not.toHaveBeenCalled();
+    expect(StripeService.createAutoTopUpIntent).not.toHaveBeenCalled();
     expect(CreditService.applyPurchase).not.toHaveBeenCalled();
     // Only the reason is written: the attempt key may cover an earlier
     // attempt whose outcome is unknown, so it is not released here.
+    // Literal on purpose: this copy is stored on the license and shown by
+    // the web app and the notification, so a change must break a test here.
+    const shown =
+      "Auto top-up skipped: $10 is no longer a valid amount (whole dollars, " +
+      "minimum $15). Update the auto top-up amount to resume.";
     expect(licenseUpdate).toHaveBeenCalledWith(
       { id: "lic-1" },
-      { creditAutoTopUpLastError: autoTopUpInvalidAmountMessage(10) },
+      { creditAutoTopUpLastError: shown },
     );
-    expect(autoTopUpInvalidAmountMessage(10)).toContain("minimum $15");
     expect(KodusNotificationClient.notifyCreditsLow).toHaveBeenCalledWith(
       expect.objectContaining({
         organizationId: "org-1",
-        autoTopUpError: autoTopUpInvalidAmountMessage(10),
+        autoTopUpError: shown,
       }),
     );
   });
@@ -358,14 +396,14 @@ describe("charge — the off-session purchase", () => {
     );
     const r = await AutoTopUpService.charge("lic-1");
     expect(r).toEqual({ charged: false, reason: "INVALID_AMOUNT" });
-    expect(StripeService.chargeSavedPaymentMethod).not.toHaveBeenCalled();
+    expect(StripeService.createAutoTopUpIntent).not.toHaveBeenCalled();
   });
 
   it("records a currency the credit price is not sold in, without charging another one", async () => {
     licenseRepo.findOne.mockResolvedValue(license());
     const message =
       "Credits cannot be charged in EUR: the credit price price_x has no EUR currency option.";
-    (StripeService.chargeSavedPaymentMethod as jest.Mock).mockRejectedValue(
+    (StripeService.autoTopUpRequest as jest.Mock).mockRejectedValue(
       Object.assign(new Error(message), {
         code: "CREDIT_CURRENCY_NOT_SUPPORTED",
       }),
@@ -394,7 +432,7 @@ describe("charge — the off-session purchase", () => {
       charged: false,
       reason: "NOT_CONFIGURED",
     });
-    expect(StripeService.chargeSavedPaymentMethod).not.toHaveBeenCalled();
+    expect(StripeService.createAutoTopUpIntent).not.toHaveBeenCalled();
   });
 });
 
@@ -421,12 +459,12 @@ describe("charge — idempotency across retries", () => {
    */
   it("reuses the stored key after an UNKNOWN outcome, so a captured charge is not charged twice", async () => {
     const claimed = license({
-      creditAutoTopUpAttemptKey: "auto-topup:lic-1:111",
+      creditAutoTopUpAttemptKey: "auto-topup:v2:lic-1:111",
     });
     licenseRepo.findOne.mockResolvedValue(claimed);
 
     // 1st attempt: the network drops. Nothing is known about the money.
-    (StripeService.chargeSavedPaymentMethod as jest.Mock).mockRejectedValueOnce(
+    (StripeService.createAutoTopUpIntent as jest.Mock).mockRejectedValueOnce(
       Object.assign(new Error("socket hang up"), {
         type: "StripeConnectionError",
       }),
@@ -441,7 +479,7 @@ describe("charge — idempotency across retries", () => {
 
     // 2nd attempt (the next sweep): same key, so Stripe returns the very
     // same PaymentIntent instead of creating a second charge.
-    (StripeService.chargeSavedPaymentMethod as jest.Mock).mockResolvedValueOnce(
+    (StripeService.createAutoTopUpIntent as jest.Mock).mockResolvedValueOnce(
       {
         id: "pi_same",
         status: "succeeded",
@@ -454,13 +492,124 @@ describe("charge — idempotency across retries", () => {
     await AutoTopUpService.charge("lic-1");
 
     const keys = (
-      StripeService.chargeSavedPaymentMethod as jest.Mock
-    ).mock.calls.map((c) => c[0].idempotencyKey);
-    expect(keys).toEqual(["auto-topup:lic-1:111", "auto-topup:lic-1:111"]);
+      StripeService.createAutoTopUpIntent as jest.Mock
+    ).mock.calls.map((c) => c[1]);
+    expect(keys).toEqual(["auto-topup:v2:lic-1:111", "auto-topup:v2:lic-1:111"]);
     // The ledger side is idempotent on the PaymentIntent id as well.
     expect(CreditService.applyPurchase).toHaveBeenLastCalledWith(
       expect.objectContaining({ usageKey: "stripe:pi:pi_same" }),
     );
+  });
+
+  it("stores the request before sending it, and a retry replays it after the Price or currency moved", async () => {
+    const key = "auto-topup:v2:lic-1:111";
+    licenseRepo.findOne.mockResolvedValueOnce(
+      license({ creditAutoTopUpAttemptKey: key }),
+    );
+    (StripeService.createAutoTopUpIntent as jest.Mock).mockRejectedValueOnce(
+      Object.assign(new Error("socket hang up"), {
+        type: "StripeConnectionError",
+      }),
+    );
+    await AutoTopUpService.charge("lic-1");
+
+    const sent = fakeRequest({ creditUsd: 50, chargeUsd: 53.5 });
+    // Written, under this attempt's key, before Stripe was called.
+    expect(licenseUpdate).toHaveBeenCalledWith(
+      { id: "lic-1", creditAutoTopUpAttemptKey: key },
+      { creditAutoTopUpAttemptRequest: { key, params: sent } },
+    );
+    expect(licenseUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+      (StripeService.createAutoTopUpIntent as jest.Mock).mock
+        .invocationCallOrder[0],
+    );
+
+    // Before the retry the customer's currency became BRL: pricing the
+    // attempt again would send BRL 29100 under a key Stripe holds for
+    // USD 5350, and Stripe would refuse it.
+    (StripeService.autoTopUpRequest as jest.Mock).mockResolvedValue({
+      ...sent,
+      amount: 29100,
+      currency: "brl",
+    });
+    licenseRepo.findOne.mockResolvedValueOnce(
+      license({
+        creditAutoTopUpAttemptKey: key,
+        creditAutoTopUpAttemptRequest: { key, params: sent },
+      }),
+    );
+    (StripeService.createAutoTopUpIntent as jest.Mock).mockResolvedValueOnce({
+      id: "pi_same",
+      status: "succeeded",
+      amount: 5350,
+      currency: "usd",
+    });
+    (CreditService.applyPurchase as jest.Mock).mockResolvedValue({
+      applied: true,
+      balanceUsd: 53,
+    });
+    const r = await AutoTopUpService.charge("lic-1");
+
+    expect(r).toEqual({ charged: true, creditUsd: 50, balanceUsd: 53 });
+    expect(StripeService.autoTopUpRequest).toHaveBeenCalledTimes(1);
+    expect(
+      (StripeService.createAutoTopUpIntent as jest.Mock).mock.calls,
+    ).toEqual([
+      [sent, key],
+      [sent, key],
+    ]);
+  });
+
+  it("replays an attempt claimed before requests were stored as that version sent it", async () => {
+    // A key without `v2` may have reached Stripe as USD at chargeUsd, with
+    // no Price. US$10 was valid then, so it is replayed, not skipped.
+    licenseRepo.findOne.mockResolvedValue(
+      license({
+        creditAutoTopUpAttemptKey: "auto-topup:lic-1:111",
+        creditAutoTopUpAmountUsd: 10,
+      }),
+    );
+    (StripeService.createAutoTopUpIntent as jest.Mock).mockResolvedValue({
+      id: "pi_old",
+      status: "succeeded",
+      amount: 1070,
+      currency: "usd",
+    });
+    (CreditService.applyPurchase as jest.Mock).mockResolvedValue({
+      applied: true,
+      balanceUsd: 13,
+    });
+
+    const r = await AutoTopUpService.charge("lic-1");
+
+    expect(r).toEqual({ charged: true, creditUsd: 10, balanceUsd: 13 });
+    expect(StripeService.autoTopUpRequest).not.toHaveBeenCalled();
+    expect(StripeService.legacyAutoTopUpRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ creditUsd: 10, chargeUsd: 10.7 }),
+    );
+    const [params, key] = (StripeService.createAutoTopUpIntent as jest.Mock)
+      .mock.calls[0];
+    expect(key).toBe("auto-topup:lic-1:111");
+    expect(params.metadata).not.toHaveProperty("priceId");
+    expect(licenseUpdate).toHaveBeenCalledWith(
+      { id: "lic-1", creditAutoTopUpAttemptKey: "auto-topup:lic-1:111" },
+      {
+        creditAutoTopUpAttemptRequest: {
+          key: "auto-topup:lic-1:111",
+          params,
+        },
+      },
+    );
+  });
+
+  it("does not charge an attempt whose key was dropped before its request was stored", async () => {
+    licenseRepo.findOne.mockResolvedValue(license());
+    licenseUpdate.mockResolvedValueOnce({ affected: 0 } as never);
+
+    const r = await AutoTopUpService.charge("lic-1");
+
+    expect(r).toEqual({ charged: false, reason: "ATTEMPT_SUPERSEDED" });
+    expect(StripeService.createAutoTopUpIntent).not.toHaveBeenCalled();
   });
 
   it("PARKS the attempt when Stripe refuses the key, instead of re-charging", async () => {
@@ -468,7 +617,7 @@ describe("charge — idempotency across retries", () => {
     // nothing about whether it captured. Releasing the key here is how you
     // charge a customer twice; so the attempt is parked instead.
     licenseRepo.findOne.mockResolvedValue(license());
-    (StripeService.chargeSavedPaymentMethod as jest.Mock).mockRejectedValue(
+    (StripeService.createAutoTopUpIntent as jest.Mock).mockRejectedValue(
       Object.assign(new Error("Keys for idempotent requests..."), {
         type: "StripeIdempotencyError",
       }),
@@ -493,7 +642,7 @@ describe("charge — idempotency across retries", () => {
   it("recovers a parked attempt when the customer turns it back on", async () => {
     const lic = license({
       creditAutoTopUpEnabled: false,
-      creditAutoTopUpAttemptKey: "auto-topup:lic-1:111",
+      creditAutoTopUpAttemptKey: "auto-topup:v2:lic-1:111",
       creditAutoTopUpLastError: AUTO_TOP_UP_PARKED_MESSAGE,
     });
     licenseRepo.findOne.mockResolvedValue(lic);
@@ -509,7 +658,7 @@ describe("charge — idempotency across retries", () => {
 
   it("keeps a key in flight across a NO-OP save", async () => {
     const lic = license({
-      creditAutoTopUpAttemptKey: "auto-topup:lic-1:111",
+      creditAutoTopUpAttemptKey: "auto-topup:v2:lic-1:111",
       creditAutoTopUpAmountUsd: 50,
     });
     licenseRepo.findOne.mockResolvedValue(lic);
@@ -519,7 +668,7 @@ describe("charge — idempotency across retries", () => {
       amountUsd: 50,
     });
 
-    expect(lic.creditAutoTopUpAttemptKey).toBe("auto-topup:lic-1:111");
+    expect(lic.creditAutoTopUpAttemptKey).toBe("auto-topup:v2:lic-1:111");
   });
 
   it.each([
@@ -550,19 +699,19 @@ describe("charge — idempotency across retries", () => {
       },
     },
   ])("drops a key in flight when $name", async ({ run }) => {
-    const lic = license({ creditAutoTopUpAttemptKey: "auto-topup:lic-1:111" });
+    const lic = license({ creditAutoTopUpAttemptKey: "auto-topup:v2:lic-1:111" });
     await run(lic as never);
     expect(lic.creditAutoTopUpAttemptKey).toBeNull();
   });
 
   it("does NOT drop the key when the feature is merely switched off", async () => {
     // Turning it off resolves nothing at the payment provider.
-    const lic = license({ creditAutoTopUpAttemptKey: "auto-topup:lic-1:111" });
+    const lic = license({ creditAutoTopUpAttemptKey: "auto-topup:v2:lic-1:111" });
     licenseRepo.findOne.mockResolvedValue(lic);
     await AutoTopUpService.updateSettings("org-1", "team-1", {
       enabled: false,
     });
-    expect(lic.creditAutoTopUpAttemptKey).toBe("auto-topup:lic-1:111");
+    expect(lic.creditAutoTopUpAttemptKey).toBe("auto-topup:v2:lic-1:111");
   });
 
   it("refuses to charge when no attempt was claimed (never invents a key)", async () => {
@@ -573,7 +722,7 @@ describe("charge — idempotency across retries", () => {
       charged: false,
       reason: "NO_ATTEMPT_CLAIMED",
     });
-    expect(StripeService.chargeSavedPaymentMethod).not.toHaveBeenCalled();
+    expect(StripeService.createAutoTopUpIntent).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -610,7 +759,7 @@ describe("charge — idempotency across retries", () => {
     "releases the key only on a definitive outcome: $name",
     async ({ error, definitive }) => {
       licenseRepo.findOne.mockResolvedValue(license());
-      (StripeService.chargeSavedPaymentMethod as jest.Mock).mockRejectedValue(
+      (StripeService.createAutoTopUpIntent as jest.Mock).mockRejectedValue(
         error,
       );
 

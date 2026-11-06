@@ -6,6 +6,7 @@ import {
   UpdateDateColumn,
   Index,
 } from "typeorm";
+import type Stripe from "stripe";
 
 import { numericTransformer } from "./CreditLedgerEntry";
 
@@ -181,6 +182,27 @@ export class OrganizationLicense {
    */
   @Column({ type: "varchar", nullable: true })
   creditAutoTopUpAttemptKey: string | null;
+
+  /**
+   * The exact PaymentIntent request sent under `creditAutoTopUpAttemptKey`,
+   * written BEFORE it is sent. Stripe refuses a reused key with different
+   * parameters, so a retry replays this rather than re-reading the Price or
+   * the customer's currency, either of which may have changed since. Only
+   * read while `key` matches the attempt key in flight.
+   */
+  @Column({ type: "jsonb", nullable: true })
+  creditAutoTopUpAttemptRequest: {
+    key: string;
+    params: Stripe.PaymentIntentCreateParams;
+  } | null;
+
+  /**
+   * Currency of the org's last paid credit purchase. Stripe sets
+   * `customer.currency` only for recurring billing, so for a credit-only
+   * customer this is the one record that they pay in, say, BRL.
+   */
+  @Column({ type: "varchar", nullable: true })
+  creditCurrency: string | null;
 
   @Column({ nullable: true })
   stripeCustomerId?: string;

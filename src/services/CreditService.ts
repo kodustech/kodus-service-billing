@@ -21,6 +21,7 @@ import { OrganizationLicenseRepository } from "../repositories/OrganizationLicen
 import { KodusNotificationClient } from "./KodusNotificationClient";
 import {
   AutoTopUpService,
+  autoTopUpAttemptKey,
   decideAutoTopUp,
   type AutoTopUpState,
 } from "./AutoTopUpService";
@@ -396,7 +397,7 @@ export class CreditService {
         // Stripe from charging a captured payment a second time.
         license.creditAutoTopUpAttemptKey =
           license.creditAutoTopUpAttemptKey ??
-          `auto-topup:${license.id}:${now.getTime()}`;
+          autoTopUpAttemptKey(license.id, now);
       }
       if (applied > 0 || decision.send || autoTopUp) {
         license.creditBalanceUsd = balance;
