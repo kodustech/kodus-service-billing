@@ -360,10 +360,19 @@ describe("charge — the off-session purchase", () => {
     );
   });
 
-  it("SKIPS a saved amount below the new US$15 minimum instead of charging more than agreed", async () => {
+  /** What an attempt that never reached Stripe writes when only the
+   *  customer can fix it: off, key released, reason shown once. */
+  const stoppedWith = (shown: string) => ({
+    creditAutoTopUpEnabled: false,
+    creditAutoTopUpLastError: shown,
+    creditAutoTopUpAttemptKey: null,
+    creditAutoTopUpAttemptRequest: null,
+  });
+
+  it("turns auto top-up off for a saved amount below the new US$15 minimum, instead of charging more than agreed", async () => {
     // A config saved when the minimum was US$10. Bumping it to 15 would be
-    // an off-session charge the customer never agreed to; skipping costs
-    // only a top-up, and the recorded reason tells them how to resume.
+    // an off-session charge the customer never agreed to. Leaving it on
+    // re-claimed the attempt and re-notified the customer every hour.
     licenseRepo.findOne.mockResolvedValue(
       license({ creditAutoTopUpAmountUsd: 10, creditBalanceUsd: 1 }),
     );
@@ -373,17 +382,18 @@ describe("charge — the off-session purchase", () => {
     expect(r).toEqual({ charged: false, reason: "INVALID_AMOUNT" });
     expect(StripeService.createAutoTopUpIntent).not.toHaveBeenCalled();
     expect(CreditService.applyPurchase).not.toHaveBeenCalled();
-    // Only the reason is written: the attempt key may cover an earlier
-    // attempt whose outcome is unknown, so it is not released here.
     // Literal on purpose: this copy is stored on the license and shown by
     // the web app and the notification, so a change must break a test here.
     const shown =
-      "Auto top-up skipped: $10 is no longer a valid amount (whole dollars, " +
-      "minimum $15). Update the auto top-up amount to resume.";
+      "Auto top-up was turned off: $10 is no longer a valid amount (whole " +
+      "dollars, minimum $15). Choose a new amount to turn it back on.";
+    // The key is released: no request was stored under it, so nothing was
+    // ever sent with it.
     expect(licenseUpdate).toHaveBeenCalledWith(
       { id: "lic-1" },
-      { creditAutoTopUpLastError: shown },
+      stoppedWith(shown),
     );
+    expect(KodusNotificationClient.notifyCreditsLow).toHaveBeenCalledTimes(1);
     expect(KodusNotificationClient.notifyCreditsLow).toHaveBeenCalledWith(
       expect.objectContaining({
         organizationId: "org-1",
@@ -392,38 +402,69 @@ describe("charge — the off-session purchase", () => {
     );
   });
 
-  it("SKIPS a fractional saved amount (credits are whole dollars)", async () => {
+  it("turns auto top-up off for a fractional saved amount (credits are whole dollars)", async () => {
     licenseRepo.findOne.mockResolvedValue(
       license({ creditAutoTopUpAmountUsd: 37.5 }),
     );
     const r = await AutoTopUpService.charge("lic-1");
     expect(r).toEqual({ charged: false, reason: "INVALID_AMOUNT" });
     expect(StripeService.createAutoTopUpIntent).not.toHaveBeenCalled();
+    expect(licenseUpdate).toHaveBeenCalledWith(
+      { id: "lic-1" },
+      expect.objectContaining({ creditAutoTopUpEnabled: false }),
+    );
   });
 
-  it("records a currency the credit price is not sold in, without charging another one", async () => {
+  it("turns auto top-up off for a currency the credit price is not sold in, with no internal id in the copy", async () => {
     licenseRepo.findOne.mockResolvedValue(license());
-    const message =
-      "Credits cannot be charged in EUR: the credit price price_x has no EUR currency option.";
     (StripeService.autoTopUpRequest as jest.Mock).mockRejectedValue(
-      Object.assign(new Error(message), {
+      Object.assign(new Error("Credits can't be charged in EUR yet."), {
         code: "CREDIT_CURRENCY_NOT_SUPPORTED",
+        currency: "eur",
+        priceId: "price_x",
       }),
     );
 
     const r = await AutoTopUpService.charge("lic-1");
 
-    expect(r).toEqual({ charged: false, reason: message });
-    expect(CreditService.applyPurchase).not.toHaveBeenCalled();
-    // Recorded like any failure. The key stays: it may cover an earlier
-    // attempt that reached Stripe.
-    expect(licenseUpdate).toHaveBeenCalledWith(
+    expect(r).toEqual({
+      charged: false,
+      reason: "CREDIT_CURRENCY_NOT_SUPPORTED",
+    });
+    expect(StripeService.createAutoTopUpIntent).not.toHaveBeenCalled();
+    const shown =
+      "Auto top-up was turned off: credits can't be charged in EUR yet. " +
+      "Contact support to keep topping up.";
+    expect(licenseUpdate).toHaveBeenLastCalledWith(
       { id: "lic-1" },
-      { creditAutoTopUpLastError: message },
+      stoppedWith(shown),
     );
     expect(KodusNotificationClient.notifyCreditsLow).toHaveBeenCalledWith(
-      expect.objectContaining({ autoTopUpError: message }),
+      expect.objectContaining({ autoTopUpError: shown }),
     );
+  });
+
+  it("releases the key but stays on, silently, when the credit Price is not configured", async () => {
+    // Our deploy, not their settings: nothing for the customer to fix, and
+    // it resumes by itself once STRIPE_CREDITS_PRICE_ID is set.
+    licenseRepo.findOne.mockResolvedValue(license());
+    (StripeService.autoTopUpRequest as jest.Mock).mockRejectedValue(
+      Object.assign(new Error("STRIPE_CREDITS_PRICE_ID is not set"), {
+        code: "CREDITS_PRICE_NOT_CONFIGURED",
+      }),
+    );
+
+    const r = await AutoTopUpService.charge("lic-1");
+
+    expect(r).toEqual({
+      charged: false,
+      reason: "CREDITS_PRICE_NOT_CONFIGURED",
+    });
+    expect(licenseUpdate).toHaveBeenLastCalledWith(
+      { id: "lic-1" },
+      { creditAutoTopUpAttemptKey: null, creditAutoTopUpAttemptRequest: null },
+    );
+    expect(KodusNotificationClient.notifyCreditsLow).not.toHaveBeenCalled();
   });
 
   it("does nothing when the org turned it off between the claim and the charge", async () => {

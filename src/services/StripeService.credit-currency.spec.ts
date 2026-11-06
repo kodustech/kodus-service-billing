@@ -316,7 +316,13 @@ describe("auto top-up — charged in the customer's currency", () => {
 
     expect(err).toBeInstanceOf(CreditCurrencyNotSupportedError);
     expect(err.code).toBe("CREDIT_CURRENCY_NOT_SUPPORTED");
-    expect(err.message).toContain("EUR");
+    // The message is the 409 body and reaches the customer: the Price id
+    // stays out of it, on the error for the log.
+    expect(err.message).toBe(
+      "Credits can't be charged in EUR yet. Contact support to buy credits.",
+    );
+    expect(err.message).not.toContain(PRICE_ID);
+    expect(err.priceId).toBe(PRICE_ID);
   });
 
   it("refuses when STRIPE_CREDITS_PRICE_ID is missing", async () => {

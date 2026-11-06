@@ -90,14 +90,20 @@ export function isIdempotencyConflict(error: unknown): boolean {
 }
 
 /**
- * Why an auto top-up whose saved amount is no longer purchasable (below the
- * minimum, or not whole dollars, e.g. a config saved when the minimum was
- * US$10) did not charge.
+ * Why auto top-up was switched off when its saved amount is no longer
+ * purchasable (below the minimum, or not whole dollars, e.g. a config saved
+ * when the minimum was US$10).
  */
 export const autoTopUpInvalidAmountMessage = (amountUsd: number): string =>
-  `Auto top-up skipped: $${roundUsd(amountUsd)} is no longer a valid amount ` +
-  `(whole dollars, minimum $${CREDITS_MIN_PURCHASE_USD}). Update the auto ` +
-  `top-up amount to resume.`;
+  `Auto top-up was turned off: $${roundUsd(amountUsd)} is no longer a valid ` +
+  `amount (whole dollars, minimum $${CREDITS_MIN_PURCHASE_USD}). Choose a ` +
+  `new amount to turn it back on.`;
+
+/** Why auto top-up was switched off when the customer's currency has no
+ *  credit price. Shown to the customer, so no internal ids. */
+export const autoTopUpCurrencyMessage = (currency: string): string =>
+  `Auto top-up was turned off: credits can't be charged in ` +
+  `${currency.toUpperCase()} yet. Contact support to keep topping up.`;
 
 /**
  * The idempotency key a debit mints for a new auto top-up attempt. The `v2`
@@ -368,23 +374,21 @@ export class AutoTopUpService {
         });
     } else {
       // A saved amount that is no longer purchasable (a config from before
-      // the US$15 minimum, or a fractional one) is SKIPPED with a recorded
-      // reason, never bumped to the minimum: an off-session charge must not
-      // exceed what the customer agreed to. The attempt key is left alone;
-      // changing the amount drops it (updateSettings).
+      // the US$15 minimum, or a fractional one) is never bumped to the
+      // minimum: an off-session charge must not exceed what the customer
+      // agreed to. Auto top-up is switched off with the reason, once, rather
+      // than re-claimed and re-notified every hour; re-enabling needs a valid
+      // amount (updateSettings).
       const creditUsd = CreditService.validatePurchaseAmount(amount);
       if (creditUsd === null) {
-        const reportedError = autoTopUpInvalidAmountMessage(amount);
         console.error(
-          `Auto top-up skipped for org ${license.organizationId}: amount ` +
+          `Auto top-up turned off for org ${license.organizationId}: amount ` +
             `${amount} is not a valid purchase amount`,
         );
-        await AppDataSource.getRepository(OrganizationLicense).update(
-          { id: license.id },
-          { creditAutoTopUpLastError: reportedError },
+        await this.stopBeforeStripe(
+          license,
+          autoTopUpInvalidAmountMessage(amount),
         );
-        clearCacheByPrefix("org-license");
-        this.notifyFailure(license, reportedError);
         return { charged: false, reason: "INVALID_AMOUNT" };
       }
       prepare = () =>
@@ -460,6 +464,30 @@ export class AutoTopUpService {
       console.error(
         `Auto top-up failed for org ${license.organizationId}: ${message}`,
       );
+      // Raised while pricing a NEW attempt, before anything is sent to
+      // Stripe (a replayed request is never re-priced). Kept as plain
+      // failures, the attempt would be re-claimed and fail the same way
+      // every hour.
+      const code = (error as { code?: string } | null)?.code;
+      if (code === "CREDIT_CURRENCY_NOT_SUPPORTED") {
+        const currency = (error as { currency?: string }).currency ?? "";
+        await this.stopBeforeStripe(license, autoTopUpCurrencyMessage(currency));
+        return { charged: false, reason: code };
+      }
+      if (code === "CREDITS_PRICE_NOT_CONFIGURED") {
+        // Our deploy, not the customer's settings: nothing to tell them.
+        // The key is released and auto top-up stays on, so it resumes by
+        // itself once the Price id is set (the boot log already warns).
+        await AppDataSource.getRepository(OrganizationLicense).update(
+          { id: license.id },
+          {
+            creditAutoTopUpAttemptKey: null,
+            creditAutoTopUpAttemptRequest: null,
+          },
+        );
+        clearCacheByPrefix("org-license");
+        return { charged: false, reason: code };
+      }
       // An idempotency conflict is the one failure where retrying is the
       // dangerous move: the key is registered at Stripe, so the earlier
       // request got there, and its outcome is unknown. PARK it — keep the
@@ -495,6 +523,28 @@ export class AutoTopUpService {
         reason: parked ? "PARKED_IDEMPOTENCY_CONFLICT" : message,
       };
     }
+  }
+
+  /**
+   * Switch auto top-up off for a reason only the customer can fix, and tell
+   * them once. Only for an attempt that never reached Stripe — a new one,
+   * with no request stored under its key — so the key is released too.
+   */
+  private static async stopBeforeStripe(
+    license: OrganizationLicense,
+    reportedError: string,
+  ): Promise<void> {
+    await AppDataSource.getRepository(OrganizationLicense).update(
+      { id: license.id },
+      {
+        creditAutoTopUpEnabled: false,
+        creditAutoTopUpLastError: reportedError,
+        creditAutoTopUpAttemptKey: null,
+        creditAutoTopUpAttemptRequest: null,
+      },
+    );
+    clearCacheByPrefix("org-license");
+    this.notifyFailure(license, reportedError);
   }
 
   /** Tell the customer an auto top-up did not happen, and why. */

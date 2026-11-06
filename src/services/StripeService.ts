@@ -23,13 +23,15 @@ export const CREDITS_PRICE_CACHE_TTL_MS = 10 * 60 * 1000;
  *  customer's currency: charging another currency is never the fallback. */
 export class CreditCurrencyNotSupportedError extends Error {
   readonly code = "CREDIT_CURRENCY_NOT_SUPPORTED";
+  /** The message reaches the customer (the 409 body); the Price id is for
+   *  the log only. */
   constructor(
     readonly currency: string,
-    priceId: string,
+    readonly priceId: string,
   ) {
     super(
-      `Credits cannot be charged in ${currency.toUpperCase()}: the credit ` +
-        `price ${priceId} has no ${currency.toUpperCase()} currency option.`,
+      `Credits can't be charged in ${currency.toUpperCase()} yet. Contact ` +
+        `support to buy credits.`,
     );
     this.name = "CreditCurrencyNotSupportedError";
   }

@@ -635,6 +635,7 @@ export class SubscriptionController {
                 console.error(
                     "Moeda do cliente sem preço de créditos:",
                     (error as Error).message,
+                    (error as { priceId?: string }).priceId,
                 );
                 return res.status(409).json({
                     error: (error as Error).message,
