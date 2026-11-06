@@ -387,6 +387,7 @@ export class AutoTopUpService {
         );
         await this.stopBeforeStripe(
           license,
+          idempotencyKey,
           autoTopUpInvalidAmountMessage(amount),
         );
         return { charged: false, reason: "INVALID_AMOUNT" };
@@ -471,7 +472,11 @@ export class AutoTopUpService {
       const code = (error as { code?: string } | null)?.code;
       if (code === "CREDIT_CURRENCY_NOT_SUPPORTED") {
         const currency = (error as { currency?: string }).currency ?? "";
-        await this.stopBeforeStripe(license, autoTopUpCurrencyMessage(currency));
+        await this.stopBeforeStripe(
+          license,
+          idempotencyKey,
+          autoTopUpCurrencyMessage(currency),
+        );
         return { charged: false, reason: code };
       }
       if (code === "CREDITS_PRICE_NOT_CONFIGURED") {
@@ -479,7 +484,7 @@ export class AutoTopUpService {
         // The key is released and auto top-up stays on, so it resumes by
         // itself once the Price id is set (the boot log already warns).
         await AppDataSource.getRepository(OrganizationLicense).update(
-          { id: license.id },
+          { id: license.id, creditAutoTopUpAttemptKey: idempotencyKey },
           {
             creditAutoTopUpAttemptKey: null,
             creditAutoTopUpAttemptRequest: null,
@@ -529,13 +534,18 @@ export class AutoTopUpService {
    * Switch auto top-up off for a reason only the customer can fix, and tell
    * them once. Only for an attempt that never reached Stripe — a new one,
    * with no request stored under its key — so the key is released too.
+   * Scoped to that key: a re-enable or a new card saved while the attempt
+   * was being priced already dropped it, and must not be switched back off.
    */
   private static async stopBeforeStripe(
     license: OrganizationLicense,
+    idempotencyKey: string,
     reportedError: string,
   ): Promise<void> {
-    await AppDataSource.getRepository(OrganizationLicense).update(
-      { id: license.id },
+    const written = await AppDataSource.getRepository(
+      OrganizationLicense,
+    ).update(
+      { id: license.id, creditAutoTopUpAttemptKey: idempotencyKey },
       {
         creditAutoTopUpEnabled: false,
         creditAutoTopUpLastError: reportedError,
@@ -544,6 +554,7 @@ export class AutoTopUpService {
       },
     );
     clearCacheByPrefix("org-license");
+    if (written?.affected === 0) return;
     this.notifyFailure(license, reportedError);
   }
 

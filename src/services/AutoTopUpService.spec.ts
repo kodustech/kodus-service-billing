@@ -72,6 +72,8 @@ import { KodusNotificationClient } from "./KodusNotificationClient";
 import { StripeService } from "./StripeService";
 
 const NOW = new Date("2026-09-09T12:00:00Z");
+/** The attempt key the fixture license holds. */
+const KEY = "auto-topup:v2:lic-1:1789000000000";
 
 const license = (over: Record<string, unknown> = {}) => ({
   id: "lic-1",
@@ -390,7 +392,7 @@ describe("charge — the off-session purchase", () => {
     // The key is released: no request was stored under it, so nothing was
     // ever sent with it.
     expect(licenseUpdate).toHaveBeenCalledWith(
-      { id: "lic-1" },
+      { id: "lic-1", creditAutoTopUpAttemptKey: KEY },
       stoppedWith(shown),
     );
     expect(KodusNotificationClient.notifyCreditsLow).toHaveBeenCalledTimes(1);
@@ -410,7 +412,7 @@ describe("charge — the off-session purchase", () => {
     expect(r).toEqual({ charged: false, reason: "INVALID_AMOUNT" });
     expect(StripeService.createAutoTopUpIntent).not.toHaveBeenCalled();
     expect(licenseUpdate).toHaveBeenCalledWith(
-      { id: "lic-1" },
+      { id: "lic-1", creditAutoTopUpAttemptKey: KEY },
       expect.objectContaining({ creditAutoTopUpEnabled: false }),
     );
   });
@@ -436,12 +438,34 @@ describe("charge — the off-session purchase", () => {
       "Auto top-up was turned off: credits can't be charged in EUR yet. " +
       "Contact support to keep topping up.";
     expect(licenseUpdate).toHaveBeenLastCalledWith(
-      { id: "lic-1" },
+      { id: "lic-1", creditAutoTopUpAttemptKey: KEY },
       stoppedWith(shown),
     );
     expect(KodusNotificationClient.notifyCreditsLow).toHaveBeenCalledWith(
       expect.objectContaining({ autoTopUpError: shown }),
     );
+  });
+
+  it("leaves a re-enable made while the attempt was being priced alone", async () => {
+    // The customer turned it back on (which drops the key) while this
+    // attempt was still talking to Stripe: the stop matches no row, and
+    // nothing is switched off or announced.
+    licenseRepo.findOne.mockResolvedValue(license());
+    (StripeService.autoTopUpRequest as jest.Mock).mockRejectedValue(
+      Object.assign(new Error("Credits can't be charged in EUR yet."), {
+        code: "CREDIT_CURRENCY_NOT_SUPPORTED",
+        currency: "eur",
+      }),
+    );
+    licenseUpdate.mockResolvedValueOnce({ affected: 0 } as never);
+
+    await AutoTopUpService.charge("lic-1");
+
+    expect(licenseUpdate).toHaveBeenCalledWith(
+      { id: "lic-1", creditAutoTopUpAttemptKey: KEY },
+      expect.objectContaining({ creditAutoTopUpEnabled: false }),
+    );
+    expect(KodusNotificationClient.notifyCreditsLow).not.toHaveBeenCalled();
   });
 
   it("releases the key but stays on, silently, when the credit Price is not configured", async () => {
@@ -461,7 +485,7 @@ describe("charge — the off-session purchase", () => {
       reason: "CREDITS_PRICE_NOT_CONFIGURED",
     });
     expect(licenseUpdate).toHaveBeenLastCalledWith(
-      { id: "lic-1" },
+      { id: "lic-1", creditAutoTopUpAttemptKey: KEY },
       { creditAutoTopUpAttemptKey: null, creditAutoTopUpAttemptRequest: null },
     );
     expect(KodusNotificationClient.notifyCreditsLow).not.toHaveBeenCalled();
