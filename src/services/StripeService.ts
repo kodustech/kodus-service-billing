@@ -7,10 +7,67 @@ import { getPlanTypeByPriceId, getPriceIdForPlan } from "../config/planPricing";
 import { KodusNotificationClient } from "./KodusNotificationClient";
 import { CreditService } from "./CreditService";
 import { AutoTopUpService } from "./AutoTopUpService";
-import { chargeForCredit, CREDITS_MARKUP_PCT } from "../config/creditPricing";
+import {
+  chargeForCredit,
+  CREDITS_MARKUP_PCT,
+  getCreditsPriceId,
+} from "../config/creditPricing";
 import { OrganizationLicense } from "../entities/OrganizationLicense";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "");
+
+/** The credit Price is re-read at most this often (it changes rarely). */
+export const CREDITS_PRICE_CACHE_TTL_MS = 10 * 60 * 1000;
+
+/** Raised instead of charging when the credit Price has no option in the
+ *  customer's currency: charging another currency is never the fallback. */
+export class CreditCurrencyNotSupportedError extends Error {
+  readonly code = "CREDIT_CURRENCY_NOT_SUPPORTED";
+  /** The message reaches the customer (the 409 body); the Price id is for
+   *  the log only. */
+  constructor(
+    readonly currency: string,
+    readonly priceId: string,
+  ) {
+    super(
+      `Credits can't be charged in ${currency.toUpperCase()} yet. Contact ` +
+        `support to buy credits.`,
+    );
+    this.name = "CreditCurrencyNotSupportedError";
+  }
+}
+
+/**
+ * Minor-unit price of ONE credit unit (US$1 of credit, markup included) in
+ * `currency`: the Price's own `unit_amount` for its default currency, the
+ * matching `currency_options` entry otherwise. Null when the Price is not
+ * sold in that currency.
+ */
+export function creditUnitAmount(
+  price: Pick<
+    Stripe.Price,
+    "currency" | "unit_amount" | "unit_amount_decimal" | "currency_options"
+  >,
+  currency: string,
+): number | null {
+  const c = currency.toLowerCase();
+  const option =
+    c === price.currency.toLowerCase()
+      ? price
+      : (price.currency_options?.[c] ?? null);
+  if (!option) return null;
+  if (typeof option.unit_amount === "number" && option.unit_amount > 0) {
+    return option.unit_amount;
+  }
+  const decimal = Number(option.unit_amount_decimal);
+  return Number.isFinite(decimal) && decimal > 0 ? decimal : null;
+}
+
+let creditsPriceCache: {
+  id: string;
+  price: Stripe.Price;
+  expiresAt: number;
+} | null = null;
 
 export class StripeService {
   // Criar sessão de checkout para assinatura
@@ -58,17 +115,74 @@ export class StripeService {
   }
 
   /**
+   * The multi-currency credit Price, with every `currency_options` entry.
+   * Cached in memory for `CREDITS_PRICE_CACHE_TTL_MS`: auto top-ups read it
+   * on every charge and the Price changes only when someone edits it.
+   */
+  static async getCreditsPrice(): Promise<Stripe.Price> {
+    const id = getCreditsPriceId();
+    const now = Date.now();
+    if (
+      creditsPriceCache &&
+      creditsPriceCache.id === id &&
+      creditsPriceCache.expiresAt > now
+    ) {
+      return creditsPriceCache.price;
+    }
+    const price = await stripe.prices.retrieve(id, {
+      expand: ["currency_options"],
+    });
+    creditsPriceCache = {
+      id,
+      price,
+      expiresAt: now + CREDITS_PRICE_CACHE_TTL_MS,
+    };
+    return price;
+  }
+
+  /** Drop the cached credit Price (tests, or after editing the Price). */
+  static resetCreditsPriceCache(): void {
+    creditsPriceCache = null;
+  }
+
+  /**
+   * The currency an org's credits are charged in: Stripe's own
+   * `customer.currency` (set once they have recurring billing, and locked),
+   * else the currency of their last paid credit purchase (`creditCurrency`,
+   * recorded by the webhook), else null.
+   */
+  static async creditCurrencyOf(
+    license: Pick<OrganizationLicense, "stripeCustomerId" | "creditCurrency">,
+  ): Promise<string | null> {
+    let currency: string | null = null;
+    if (license.stripeCustomerId) {
+      const retrieved = await stripe.customers.retrieve(
+        license.stripeCustomerId,
+      );
+      if (!retrieved.deleted) {
+        currency = (retrieved as Stripe.Customer).currency ?? null;
+      }
+    }
+    currency = currency || license.creditCurrency || null;
+    return currency ? currency.toLowerCase() : null;
+  }
+
+  /**
    * One-time Checkout for a prepaid credit pack ("Kodus as the provider").
-   * The customer pays `creditUsd` plus the markup; the ledger is credited with
-   * `creditUsd` (list-price USD) when `checkout.session.completed` arrives.
-   * Ad-hoc `price_data` so packs need no Stripe Price ids in env; the metadata
-   * `kind` is what the shared webhook handler branches on.
+   * Sold as `creditUsd` units of the multi-currency credit Price (one unit =
+   * US$1 of credit, markup included), so a BRL customer pays the Price's BRL
+   * option and a USD customer the default. The ledger is credited with
+   * `creditUsd` (list-price USD) when `checkout.session.completed` arrives,
+   * whatever currency was presented; the metadata `kind` is what the shared
+   * webhook handler branches on.
    */
   static async createCreditCheckoutSession(
     organizationId: string,
     teamId: string,
     creditUsd: number
   ): Promise<string> {
+    const priceId = getCreditsPriceId();
+
     const license = await OrganizationLicenseRepository.findOne({
       where: { organizationId, teamId },
     });
@@ -78,25 +192,24 @@ export class StripeService {
     }
 
     const chargeUsd = chargeForCredit(creditUsd);
-    const unitAmount = Math.round(chargeUsd * 100);
-    const label = `Kodus credits — $${creditUsd.toFixed(2)}`;
+
+    // Stripe locks a customer to the currency they already pay in, so pin the
+    // session to it and Stripe picks the matching currency option. A new
+    // customer (or one with no currency yet) gets no `currency`: Checkout
+    // then localizes from the buyer's location.
+    const currency = await this.creditCurrencyOf(license);
+    if (currency) {
+      const price = await this.getCreditsPrice();
+      if (creditUnitAmount(price, currency) === null) {
+        throw new CreditCurrencyNotSupportedError(currency, priceId);
+      }
+    }
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
       mode: "payment",
-      line_items: [
-        {
-          quantity: 1,
-          price_data: {
-            currency: "usd",
-            unit_amount: unitAmount,
-            product_data: {
-              name: label,
-              description: `Prepaid credits for AI models routed by Kodus. Includes a ${CREDITS_MARKUP_PCT}% platform fee.`,
-            },
-          },
-        },
-      ],
+      line_items: [{ price: priceId, quantity: creditUsd }],
+      ...(currency ? { currency } : {}),
       // Attach to the existing customer so the receipt and the portal line
       // up with the subscription; otherwise let Checkout create one and the
       // webhook stores it.
@@ -112,8 +225,13 @@ export class StripeService {
         teamId,
         licenseId: license.id,
         creditUsd: String(creditUsd),
+        // USD-equivalent of the charge. The amount actually paid, and its
+        // currency, are the session's `amount_total` / `currency`, recorded on
+        // the ledger entry by the webhook.
         chargeUsd: String(chargeUsd),
         markupPct: String(CREDITS_MARKUP_PCT),
+        priceId,
+        requestedCurrency: currency ?? "auto",
       },
       // Stripe does NOT copy session metadata onto the PaymentIntent.
       payment_intent_data: {
@@ -200,22 +318,70 @@ export class StripeService {
   }
 
   /**
-   * Off-session charge of the saved card for an auto top-up. Confirmed in
-   * one call; a card that needs authentication or declines throws, and the
-   * caller records the error instead of retrying blindly.
+   * The off-session PaymentIntent request for a NEW auto top-up attempt.
+   * Built once per attempt: the caller stores it under the attempt's
+   * idempotency key before sending, and a retry replays it as stored.
+   *
+   * Charged in the customer's currency at the credit Price's rate for it
+   * (`creditUsd` × that currency's unit amount), so an auto top-up costs the
+   * same as buying the same credit through Checkout. A customer with no
+   * known currency is charged in the Price's default currency (USD). A
+   * currency the Price is not sold in throws `CreditCurrencyNotSupportedError`
+   * before anything reaches Stripe.
    */
-  static async chargeSavedPaymentMethod(input: {
+  static async autoTopUpRequest(input: {
+    license: OrganizationLicense;
+    paymentMethodId: string;
+    /** USD-equivalent of the charge, for the metadata only. */
+    chargeUsd: number;
+    /** Whole dollars of credit: the quantity of the credit Price. */
+    creditUsd: number;
+  }): Promise<Stripe.PaymentIntentCreateParams> {
+    const priceId = getCreditsPriceId();
+    const customer = await this.ensureCustomer(input.license);
+    const price = await this.getCreditsPrice();
+    const currency =
+      (await this.creditCurrencyOf(input.license)) ??
+      price.currency.toLowerCase();
+    const unitAmount = creditUnitAmount(price, currency);
+    if (unitAmount === null) {
+      throw new CreditCurrencyNotSupportedError(currency, priceId);
+    }
+    return {
+      amount: Math.round(input.creditUsd * unitAmount),
+      currency,
+      customer,
+      payment_method: input.paymentMethodId,
+      off_session: true,
+      confirm: true,
+      description: `Kodus credits auto top-up — $${input.creditUsd.toFixed(2)} (includes ${CREDITS_MARKUP_PCT}% platform fee)`,
+      metadata: {
+        kind: "credit_auto_topup",
+        organizationId: input.license.organizationId,
+        teamId: input.license.teamId,
+        creditUsd: String(input.creditUsd),
+        chargeUsd: String(input.chargeUsd),
+        markupPct: String(CREDITS_MARKUP_PCT),
+        priceId,
+      },
+    };
+  }
+
+  /**
+   * The request an attempt claimed BEFORE requests were stored sent: USD at
+   * `chargeUsd`, no Price. Rebuilt byte for byte from that version so its
+   * key replays it as Stripe already has it; any other parameters under that
+   * key are refused, and the attempt would park without crediting a charge
+   * that may have been captured.
+   */
+  static async legacyAutoTopUpRequest(input: {
     license: OrganizationLicense;
     paymentMethodId: string;
     chargeUsd: number;
     creditUsd: number;
-    /** One key per claimed attempt: a retry after a timeout returns the SAME
-     *  PaymentIntent instead of charging the card again. */
-    idempotencyKey: string;
-  }): Promise<Stripe.PaymentIntent> {
+  }): Promise<Stripe.PaymentIntentCreateParams> {
     const customer = await this.ensureCustomer(input.license);
-    return stripe.paymentIntents.create(
-      {
+    return {
       amount: Math.round(input.chargeUsd * 100),
       currency: "usd",
       customer,
@@ -231,9 +397,21 @@ export class StripeService {
         chargeUsd: String(input.chargeUsd),
         markupPct: String(CREDITS_MARKUP_PCT),
       },
-      },
-      { idempotencyKey: input.idempotencyKey }
-    );
+    };
+  }
+
+  /**
+   * Off-session charge of the saved card. Confirmed in one call; a card that
+   * needs authentication or declines throws, and the caller records the
+   * error instead of retrying blindly. One key per claimed attempt: a retry
+   * after a timeout returns the SAME PaymentIntent instead of charging the
+   * card again.
+   */
+  static async createAutoTopUpIntent(
+    params: Stripe.PaymentIntentCreateParams,
+    idempotencyKey: string,
+  ): Promise<Stripe.PaymentIntent> {
+    return stripe.paymentIntents.create(params, { idempotencyKey });
   }
 
   static async handleWebhookEvent(event: Stripe.Event): Promise<void> {
@@ -376,10 +554,26 @@ export class StripeService {
             : session.payment_intent?.id,
         chargeUsd: Number(session.metadata?.chargeUsd),
         markupPct: Number(session.metadata?.markupPct),
+        priceId: session.metadata?.priceId,
+        // What was actually paid: minor units of `currency` (BRL centavos
+        // for a BRL buyer), not necessarily US cents.
         amountTotalCents: session.amount_total,
         currency: session.currency,
       },
     });
+
+    // Remember the currency they paid in: for a customer Stripe has not
+    // locked to a currency, it is the only record that their auto top-ups
+    // must charge BRL rather than the Price's USD default. Written after the
+    // credit so a failure never holds back a paid purchase, and NOT caught:
+    // the webhook then fails, Stripe redelivers it, the credit is skipped as
+    // already applied (same usageKey) and this write is retried.
+    if (license && session.currency) {
+      await OrganizationLicenseRepository.update(
+        { id: license.id },
+        { creditCurrency: session.currency.toLowerCase() },
+      );
+    }
 
     clearCacheByPrefix("org-license");
   }

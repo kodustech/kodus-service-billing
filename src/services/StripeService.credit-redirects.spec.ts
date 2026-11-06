@@ -30,7 +30,18 @@ jest.mock("stripe", () =>
         }),
       },
     },
-    customers: { create: jest.fn(async () => ({ id: "cus_1" })) },
+    customers: {
+      create: jest.fn(async () => ({ id: "cus_1" })),
+      retrieve: jest.fn(async () => ({ id: "cus_1", currency: "usd" })),
+    },
+    prices: {
+      retrieve: jest.fn(async () => ({
+        id: "price_credits",
+        currency: "usd",
+        unit_amount: 107,
+        currency_options: { usd: { unit_amount: 107 } },
+      })),
+    },
   })),
 );
 jest.mock("../repositories/OrganizationLicenseRepository", () => ({
@@ -58,6 +69,7 @@ describe("credit checkout return URLs", () => {
   beforeAll(async () => {
     process.env.FRONTEND_URL = FRONTEND;
     process.env.STRIPE_SECRET_KEY = "sk_test_x";
+    process.env.STRIPE_CREDITS_PRICE_ID = "price_credits";
     ({ StripeService } = await import("./StripeService"));
   });
 

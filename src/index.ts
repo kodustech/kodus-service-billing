@@ -11,6 +11,14 @@ import "dotenv/config";
 import { registerApiDocs } from "./config/docs/registerDocs";
 
 const app: Express = express();
+
+// Credit purchases fail at request time without this; say so at boot too, so
+// a deploy that forgot it shows up in the logs before a customer hits it.
+if (!process.env.STRIPE_CREDITS_PRICE_ID?.trim()) {
+  console.warn(
+    "STRIPE_CREDITS_PRICE_ID is not set: credit checkout and auto top-up will fail until it is.",
+  );
+}
 const port = process.env.API_PORT || 3992;
 
 // Inicializa o banco de dados com o schema

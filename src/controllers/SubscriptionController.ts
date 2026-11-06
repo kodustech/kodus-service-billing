@@ -609,7 +609,7 @@ export class SubscriptionController {
             const amount = CreditService.validatePurchaseAmount(creditUsd);
             if (amount === null) {
                 return res.status(400).json({
-                    error: "creditUsd inválido: use um pacote listado ou um valor dentro dos limites",
+                    error: "creditUsd inválido: use um pacote listado ou um valor inteiro em dólares dentro dos limites",
                 });
             }
 
@@ -621,6 +621,26 @@ export class SubscriptionController {
 
             return res.json({ url, ...CreditService.quote(amount) });
         } catch (error) {
+            const code = (error as { code?: string } | null)?.code;
+            if (code === "CREDITS_PRICE_NOT_CONFIGURED") {
+                console.error(
+                    "Checkout de créditos indisponível:",
+                    (error as Error).message,
+                );
+                return res.status(503).json({
+                    error: "Compra de créditos indisponível: preço não configurado",
+                });
+            }
+            if (code === "CREDIT_CURRENCY_NOT_SUPPORTED") {
+                console.error(
+                    "Moeda do cliente sem preço de créditos:",
+                    (error as Error).message,
+                    (error as { priceId?: string }).priceId,
+                );
+                return res.status(409).json({
+                    error: (error as Error).message,
+                });
+            }
             console.error("Erro ao criar checkout de créditos:", error);
             return res
                 .status(500)
