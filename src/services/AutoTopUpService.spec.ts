@@ -63,7 +63,9 @@ import {
   AUTO_TOP_UP_PARKED_MESSAGE,
   AUTO_TOP_UP_RETRY_MS,
   AutoTopUpService,
+  autoTopUpAttemptKey,
   decideAutoTopUp,
+  isPreStoredRequestKey,
 } from "./AutoTopUpService";
 import { CreditService } from "./CreditService";
 import { KodusNotificationClient } from "./KodusNotificationClient";
@@ -445,6 +447,18 @@ describe("detachPaymentMethod", () => {
     expect(state?.paymentMethod).toBeNull();
     expect(lic.creditPaymentMethodId).toBeNull();
     expect(StripeService.detachPaymentMethod).toHaveBeenCalledWith("pm_123");
+  });
+});
+
+describe("attempt keys", () => {
+  it("mints keys that are never mistaken for a pre-stored-request attempt", () => {
+    // The prefix routes the replay: a minted key read as pre-stored would
+    // replay every new attempt as the old USD request. Literal, so a drift
+    // in the format breaks here (CreditService.spec mocks the minter).
+    const key = autoTopUpAttemptKey("lic-1", NOW);
+    expect(key).toBe(`auto-topup:v2:lic-1:${NOW.getTime()}`);
+    expect(isPreStoredRequestKey(key)).toBe(false);
+    expect(isPreStoredRequestKey("auto-topup:lic-1:1789000000000")).toBe(true);
   });
 });
 
