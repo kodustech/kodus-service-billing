@@ -61,6 +61,6 @@ cron.schedule("*/5 * * * *", async () => {
   try {
     await AutoTopUpService.resumeCappedWallets();
   } catch (error) {
-    console.error("Auto top-up monthly-limit sweep failed", error);
+    console.error("Auto top-up monthly-limit sweep failed", {message: error instanceof Error ? error.message : "Unknown sweep error"});
   }
 }, { timezone: "UTC", noOverlap: true });

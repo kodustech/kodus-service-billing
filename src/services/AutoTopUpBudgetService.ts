@@ -6,6 +6,7 @@ import {
   CreditLedgerEntry,
   CreditLedgerEntryType,
 } from "../entities/CreditLedgerEntry";
+import { CreditService } from "./CreditService";
 import { OrganizationLicense } from "../entities/OrganizationLicense";
 
 export function autoTopUpMonth(now: Date) {
@@ -79,6 +80,19 @@ export class AutoTopUpBudgetService {
   /** Every caller serializes on the wallet row BEFORE checking capacity.
    * Reserve even for unlimited wallets: adding a cap during a pending charge
    * must account for that charge. Replays reuse their existing reservation. */
+  static async hasPending(
+    licenseId: string,
+    key: string | null,
+    manager: EntityManager,
+  ): Promise<boolean> {
+    return (
+      !!key &&
+      !!(await manager
+        .getRepository(CreditAutoTopUpReservation)
+        .findOneBy({ licenseId, key }))
+    );
+  }
+
   static async reserve(
     licenseId: string,
     key: string,
@@ -97,7 +111,10 @@ export class AutoTopUpBudgetService {
       const reservations = manager.getRepository(CreditAutoTopUpReservation);
       const existing = await reservations.findOneBy({ key, licenseId });
       if (existing) return existing.creditUsd === creditUsd;
-      if (!Number.isFinite(creditUsd) || creditUsd <= 0) return false;
+      // Existing reservations replay the previously authorized request even if
+      // pricing limits changed. NEW attempts obey the current purchase rules.
+      if (CreditService.validatePurchaseAmount(creditUsd) === null)
+        return false;
       const state = await this.stateOf(license, manager);
       if (
         state.monthlyRemainingUsd !== null &&

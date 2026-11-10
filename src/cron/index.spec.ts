@@ -36,12 +36,19 @@ describe("monthly auto top-up resumption schedule", () => {
       .spyOn(console, "error")
       .mockImplementation(() => undefined);
     try {
-      resume.mockRejectedValueOnce(new Error("database unavailable"));
+      const failure = Object.assign(new Error("database unavailable"), {
+        config: { headers: { Authorization: "secret-test" } },
+      });
+      resume.mockRejectedValueOnce(failure);
       await expect(tick()).resolves.toBeUndefined();
       resume.mockResolvedValueOnce(undefined);
       await tick();
       expect(resume).toHaveBeenCalledTimes(2);
-      expect(log).toHaveBeenCalled();
+      expect(log).toHaveBeenCalledWith(
+        "Auto top-up monthly-limit sweep failed",
+        { message: "database unavailable" },
+      );
+      expect(JSON.stringify(log.mock.calls)).not.toContain("secret-test");
     } finally {
       log.mockRestore();
     }

@@ -24,6 +24,7 @@ jest.mock("./StripeService", () => ({
       metadata: { creditUsd: String(creditUsd), chargeUsd: String(chargeUsd) },
     })),
     createAutoTopUpIntent: jest.fn(),
+    detachPaymentMethod: jest.fn(async () => undefined),
   },
 }));
 jest.mock("./KodusNotificationClient", () => ({
@@ -105,6 +106,7 @@ integration("monthly auto top-up budget — real PostgreSQL", () => {
     if (db.isInitialized) await db.destroy();
   });
   beforeEach(async () => {
+    (AutoTopUpService as any).resumeCursor = undefined;
     await reservations().deleteAll();
     await ledger().deleteAll();
     await licenses().deleteAll();
@@ -229,7 +231,7 @@ integration("monthly auto top-up budget — real PostgreSQL", () => {
     expect(
       await AutoTopUpBudgetService.reserve(wallet.id, "stale-key", 50),
     ).toBe(false);
-    for (const invalid of [0, -1, Infinity, NaN]) {
+    for (const invalid of [0, -1, 1, 14, 25.5, 5001, Infinity, NaN]) {
       expect(
         await AutoTopUpBudgetService.reserve(
           wallet.id,
@@ -420,6 +422,18 @@ integration("monthly auto top-up budget — real PostgreSQL", () => {
       monthlyPurchasedUsd: 50,
     });
     const calls = (StripeService.createAutoTopUpIntent as jest.Mock).mock.calls;
+    expect(calls[1]).toEqual([
+      {
+        amount: 5350,
+        currency: "usd",
+        customer: "cus_test",
+        payment_method: "pm_test",
+        off_session: true,
+        confirm: true,
+        metadata: { creditUsd: "50", chargeUsd: "53.5" },
+      },
+      "auto-topup:v2:budget:1",
+    ]);
     expect(calls[0]).toEqual(calls[1]);
   });
 
@@ -479,6 +493,130 @@ integration("monthly auto top-up budget — real PostgreSQL", () => {
       await AutoTopUpService.resumeCappedWallets();
       expect(charge).not.toHaveBeenCalled();
       expect((await state()).monthlyRemainingUsd).toBe(40);
+    } finally {
+      charge.mockRestore();
+    }
+  });
+
+  it.each(["amount", "card", "detach"])(
+    "resolves the reserved request after %s changes without orphaning capacity",
+    async (change) => {
+      (StripeService.createAutoTopUpIntent as jest.Mock).mockRejectedValueOnce(
+        new Error("timeout"),
+      );
+      await AutoTopUpService.charge(wallet.id);
+      if (change === "amount") {
+        await AutoTopUpService.updateSettings(
+          wallet.organizationId,
+          wallet.teamId,
+          { enabled: true, amountUsd: 100 },
+        );
+      } else if (change === "card") {
+        await AutoTopUpService.attachPaymentMethod(
+          await fresh(),
+          "pm_new",
+          "Visa new",
+        );
+      } else {
+        expect(
+          await AutoTopUpService.detachPaymentMethod(
+            wallet.organizationId,
+            wallet.teamId,
+          ),
+        ).toMatchObject({ monthlyLimitUsd: 100, monthlyReservedUsd: 50 });
+        await AutoTopUpService.attachPaymentMethod(
+          await fresh(),
+          "pm_new",
+          "Visa new",
+        );
+        await AutoTopUpService.updateSettings(
+          wallet.organizationId,
+          wallet.teamId,
+          { enabled: true },
+        );
+      }
+      expect((await fresh()).creditAutoTopUpAttemptKey).toBe(
+        "auto-topup:v2:budget:1",
+      );
+      (StripeService.createAutoTopUpIntent as jest.Mock).mockResolvedValue({
+        id: "pi_recovered",
+        status: "succeeded",
+        amount: 5350,
+        currency: "usd",
+      });
+      expect(await AutoTopUpService.charge(wallet.id)).toMatchObject({
+        charged: true,
+        creditUsd: 50,
+      });
+      expect(await state()).toMatchObject({
+        monthlyReservedUsd: 0,
+        monthlyPurchasedUsd: 50,
+        monthlyRemainingUsd: 50,
+      });
+      expect(
+        (StripeService.createAutoTopUpIntent as jest.Mock).mock.calls[1],
+      ).toEqual([
+        {
+          amount: 5350,
+          currency: "usd",
+          customer: "cus_test",
+          payment_method: "pm_test",
+          off_session: true,
+          confirm: true,
+          metadata: { creditUsd: "50", chargeUsd: "53.5" },
+        },
+        "auto-topup:v2:budget:1",
+      ]);
+    },
+  );
+
+  it("protects legacy unresolved attempts whose exact request is not stored", async () => {
+    await reservations().insert({
+      key: wallet.creditAutoTopUpAttemptKey!,
+      licenseId: wallet.id,
+      creditUsd: 50,
+    });
+    await expect(
+      AutoTopUpService.updateSettings(wallet.organizationId, wallet.teamId, {
+        enabled: true,
+        amountUsd: 100,
+      }),
+    ).rejects.toThrow("AUTO_TOP_UP_PENDING");
+    await expect(
+      AutoTopUpService.attachPaymentMethod(await fresh(), "pm_new", "new card"),
+    ).rejects.toThrow("AUTO_TOP_UP_PENDING");
+    expect((await fresh()).creditAutoTopUpAmountUsd).toBe(50);
+    expect((await state()).monthlyReservedUsd).toBe(50);
+  });
+
+  it("bounds each sweep and advances beyond a batch of blocked wallets", async () => {
+    await licenses().update(wallet.id, { creditAutoTopUpEnabled: false });
+    for (let i = 0; i < 101; i++) {
+      await licenses().save(
+        licenses().create({
+          organizationId: randomUUID(),
+          teamId: randomUUID(),
+          id: `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+          creditAutoTopUpEnabled: true,
+          creditAutoTopUpAmountUsd: 50,
+          creditAutoTopUpThresholdUsd: 5,
+          creditAutoTopUpMonthlyLimitUsd: i === 100 ? 100 : 1,
+          creditPaymentMethodId: "pm_test",
+          creditBalanceUsd: 0,
+        }),
+      );
+    }
+    const charge = jest
+      .spyOn(AutoTopUpService, "charge")
+      .mockResolvedValue({ charged: false, reason: "observed" });
+    try {
+      await AutoTopUpService.resumeCappedWallets();
+      expect(charge).not.toHaveBeenCalled();
+      await AutoTopUpService.resumeCappedWallets();
+      expect(charge).toHaveBeenCalledTimes(1);
+      expect(charge).toHaveBeenCalledWith(
+        "00000000-0000-4000-8000-000000000100",
+      );
     } finally {
       charge.mockRestore();
     }
