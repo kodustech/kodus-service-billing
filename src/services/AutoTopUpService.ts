@@ -1,4 +1,5 @@
 import type Stripe from "stripe";
+import type { EntityManager } from "typeorm";
 
 import { AppDataSource } from "../config/database";
 import { clearCacheByPrefix } from "../config/utils/cache";
@@ -10,6 +11,10 @@ import {
 } from "../config/creditPricing";
 import { OrganizationLicense } from "../entities/OrganizationLicense";
 import { OrganizationLicenseRepository } from "../repositories/OrganizationLicenseRepository";
+import {
+  AutoTopUpBudgetService,
+  type AutoTopUpBudgetState,
+} from "./AutoTopUpBudgetService";
 import { CreditService } from "./CreditService";
 import { KodusNotificationClient } from "./KodusNotificationClient";
 import { StripeService } from "./StripeService";
@@ -121,10 +126,10 @@ export const isPreStoredRequestKey = (key: string): boolean =>
 
 export const AUTO_TOP_UP_PARKED_MESSAGE =
   "Auto top-up was paused: a previous charge attempt is unresolved at the " +
-  "payment provider. Turn it back on to retry with a new attempt.";
+  "payment provider. Contact support to resolve it before retrying.";
 
 /** What the UI sees. Never the raw Stripe ids. */
-export type AutoTopUpState = {
+export type AutoTopUpState = Partial<AutoTopUpBudgetState> & {
   enabled: boolean;
   thresholdUsd: number | null;
   amountUsd: number | null;
@@ -139,6 +144,8 @@ export type AutoTopUpSettingsInput = {
   enabled: boolean;
   thresholdUsd?: number;
   amountUsd?: number;
+  /** Omitted preserves the saved cap, null removes it, zero pauses purchases. */
+  monthlyLimitUsd?: number | null;
 };
 
 type LicenseAutoTopUpFields = Pick<
@@ -175,6 +182,13 @@ export function decideAutoTopUp(
     ? new Date(license.creditAutoTopUpLastAt).getTime()
     : 0;
   return now.getTime() - last >= AUTO_TOP_UP_RETRY_MS;
+}
+
+export class PendingAutoTopUpError extends Error {
+  readonly code = "AUTO_TOP_UP_PENDING";
+  constructor() {
+    super("Resolve the previous charge before changing its amount or card");
+  }
 }
 
 export class AutoTopUpService {
@@ -214,64 +228,143 @@ export class AutoTopUpService {
           | "LICENSE_NOT_FOUND"
           | "NO_PAYMENT_METHOD"
           | "INVALID_AMOUNT"
-          | "INVALID_THRESHOLD";
+          | "INVALID_THRESHOLD"
+          | "INVALID_MONTHLY_LIMIT";
       }
   > {
-    const license = await OrganizationLicenseRepository.findOne({
-      where: teamId ? { organizationId, teamId } : { organizationId },
-    });
-    if (!license) return { ok: false, code: "LICENSE_NOT_FOUND" };
-
-    const wasEnabled = !!license.creditAutoTopUpEnabled;
-    // Read BEFORE the assignments below overwrite it.
-    const previousAmount = license.creditAutoTopUpAmountUsd;
-
-    if (input.enabled) {
-      if (!license.creditPaymentMethodId) {
-        return { ok: false, code: "NO_PAYMENT_METHOD" };
+    const outcome = await AppDataSource.transaction(async (manager) => {
+      const repo = manager.getRepository(OrganizationLicense);
+      const license = await repo.findOne({
+        where: teamId ? { organizationId, teamId } : { organizationId },
+        lock: { mode: "pessimistic_write" },
+      });
+      if (!license)
+        return { ok: false as const, code: "LICENSE_NOT_FOUND" as const };
+      if (input.monthlyLimitUsd !== undefined) {
+        if (
+          input.monthlyLimitUsd !== null &&
+          (typeof input.monthlyLimitUsd !== "number" ||
+            !Number.isSafeInteger(input.monthlyLimitUsd) ||
+            input.monthlyLimitUsd < 0 ||
+            input.monthlyLimitUsd > 99999999)
+        ) {
+          return { ok: false as const, code: "INVALID_MONTHLY_LIMIT" as const };
+        }
+        license.creditAutoTopUpMonthlyLimitUsd = input.monthlyLimitUsd;
       }
-      const amount = CreditService.validatePurchaseAmount(
-        input.amountUsd ?? license.creditAutoTopUpAmountUsd,
+
+      const wasEnabled = !!license.creditAutoTopUpEnabled;
+      // Read BEFORE the assignments below overwrite it.
+      const previousAmount = license.creditAutoTopUpAmountUsd;
+      const keepAttempt = await this.keepReservedAttempt(
+        license,
+        manager,
+        input.enabled &&
+          input.amountUsd !== undefined &&
+          input.amountUsd !== previousAmount,
       );
-      if (amount === null) return { ok: false, code: "INVALID_AMOUNT" };
-      const thresholdRaw =
-        input.thresholdUsd ??
-        license.creditAutoTopUpThresholdUsd ??
-        CREDITS_LOW_THRESHOLD_USD;
-      const threshold = Number(thresholdRaw);
-      if (!Number.isFinite(threshold) || threshold < 0 || threshold > amount) {
-        return { ok: false, code: "INVALID_THRESHOLD" };
+
+      if (input.enabled) {
+        if (!license.creditPaymentMethodId) {
+          return { ok: false, code: "NO_PAYMENT_METHOD" } as const;
+        }
+        const requestedAmount = input.amountUsd ?? previousAmount;
+        // Re-enabling must let an already reserved request reconcile under
+        // its original amount/key, even if today's minimum has increased.
+        // This exception cannot authorize a new request or change its amount.
+        const resumesReservedRequest =
+          keepAttempt &&
+          requestedAmount === previousAmount &&
+          typeof previousAmount === "number" &&
+          Number.isFinite(previousAmount) &&
+          previousAmount > 0 &&
+          (license.creditAutoTopUpAttemptRequest?.key ===
+            license.creditAutoTopUpAttemptKey ||
+            isPreStoredRequestKey(license.creditAutoTopUpAttemptKey!));
+        const amount = resumesReservedRequest
+          ? previousAmount
+          : CreditService.validatePurchaseAmount(requestedAmount);
+        if (amount === null)
+          return { ok: false, code: "INVALID_AMOUNT" } as const;
+        const thresholdRaw =
+          input.thresholdUsd ??
+          license.creditAutoTopUpThresholdUsd ??
+          CREDITS_LOW_THRESHOLD_USD;
+        const threshold = Number(thresholdRaw);
+        if (
+          !Number.isFinite(threshold) ||
+          threshold < 0 ||
+          threshold > amount
+        ) {
+          return { ok: false, code: "INVALID_THRESHOLD" } as const;
+        }
+        license.creditAutoTopUpEnabled = true;
+        license.creditAutoTopUpThresholdUsd = roundUsd(threshold);
+        license.creditAutoTopUpAmountUsd = amount;
+        // Re-arm: a fresh opt-in should fire on the next qualifying debit.
+        license.creditAutoTopUpLastAt = null;
+        license.creditAutoTopUpLastError = null;
+        // Only unreserved attempts can be superseded. A reserved request is
+        // already authorized and must resolve under its original key/params;
+        // new settings apply to the next purchase.
+        if (!keepAttempt && (amount !== previousAmount || !wasEnabled)) {
+          license.creditAutoTopUpAttemptKey = null;
+        }
+      } else {
+        license.creditAutoTopUpEnabled = false;
+        // The key stays: turning the feature off does not resolve an attempt
+        // that is already in flight, and the next enable clears it anyway.
+        if (typeof input.thresholdUsd === "number") {
+          license.creditAutoTopUpThresholdUsd = roundUsd(input.thresholdUsd);
+        }
+        if (typeof input.amountUsd === "number") {
+          const amount = CreditService.validatePurchaseAmount(input.amountUsd);
+          // Turning off is always allowed. Do not overwrite the old amount
+          // needed to reconcile a legacy request whose payload is not stored.
+          if (
+            amount !== null &&
+            (!keepAttempt ||
+              license.creditAutoTopUpAttemptRequest?.key ===
+                license.creditAutoTopUpAttemptKey)
+          )
+            license.creditAutoTopUpAmountUsd = amount;
+        }
       }
-      license.creditAutoTopUpEnabled = true;
-      license.creditAutoTopUpThresholdUsd = roundUsd(threshold);
-      license.creditAutoTopUpAmountUsd = amount;
-      // Re-arm: a fresh opt-in should fire on the next qualifying debit.
-      license.creditAutoTopUpLastAt = null;
-      license.creditAutoTopUpLastError = null;
-      // The AMOUNT is part of what an idempotency key covers, so a key held
-      // over from an attempt with an unknown outcome becomes unusable when it
-      // changes. Only then, though: dropping it on a no-op save would throw
-      // away the one thing stopping Stripe from capturing twice. A re-enable
-      // also clears it — that is the deliberate fresh start that recovers a
-      // parked attempt.
-      if (amount !== previousAmount || !wasEnabled) {
-        license.creditAutoTopUpAttemptKey = null;
-      }
-    } else {
-      license.creditAutoTopUpEnabled = false;
-      // The key stays: turning the feature off does not resolve an attempt
-      // that is already in flight, and the next enable clears it anyway.
-      if (typeof input.thresholdUsd === "number") {
-        license.creditAutoTopUpThresholdUsd = roundUsd(input.thresholdUsd);
-      }
-      if (typeof input.amountUsd === "number") {
-        const amount = CreditService.validatePurchaseAmount(input.amountUsd);
-        if (amount !== null) license.creditAutoTopUpAmountUsd = amount;
-      }
+      await repo.save(license);
+      return {
+        ok: true as const,
+        state: {
+          ...this.stateOf(license),
+          ...(await AutoTopUpBudgetService.stateOf(license, manager)),
+        },
+      };
+    });
+    if (outcome.ok) clearCacheByPrefix("org-license");
+    return outcome;
+  }
+
+  /** Never orphan a reservation by rotating its key. A stored request can be
+   * resolved verbatim after settings change; a legacy unknown request must
+   * be resolved before its amount/card can be changed. */
+  private static async keepReservedAttempt(
+    license: OrganizationLicense,
+    manager: EntityManager,
+    changesCharge: boolean,
+  ): Promise<boolean> {
+    const pending = await AutoTopUpBudgetService.hasPending(
+      license.id,
+      license.creditAutoTopUpAttemptKey,
+      manager,
+    );
+    if (
+      pending &&
+      changesCharge &&
+      license.creditAutoTopUpAttemptRequest?.key !==
+        license.creditAutoTopUpAttemptKey
+    ) {
+      throw new PendingAutoTopUpError();
     }
-    await OrganizationLicenseRepository.save(license);
-    clearCacheByPrefix("org-license");
-    return { ok: true, state: this.stateOf(license) };
+    return pending;
   }
 
   /** Record the card Stripe saved (from a Checkout or a setup session). */
@@ -280,13 +373,24 @@ export class AutoTopUpService {
     paymentMethodId: string,
     label: string | null,
   ): Promise<void> {
-    license.creditPaymentMethodId = paymentMethodId;
-    license.creditPaymentMethodLabel = label;
-    license.creditAutoTopUpLastError = null;
-    // A different card is a different charge: any key still in flight is
-    // unusable, so drop it rather than have Stripe refuse the next attempt.
-    license.creditAutoTopUpAttemptKey = null;
-    await OrganizationLicenseRepository.save(license);
+    await AppDataSource.transaction(async (manager) => {
+      const repo = manager.getRepository(OrganizationLicense);
+      const current = await repo.findOne({
+        where: { id: license.id },
+        lock: { mode: "pessimistic_write" },
+      });
+      if (!current) throw new Error("LICENSE_NOT_FOUND");
+      const keepAttempt = await this.keepReservedAttempt(
+        current,
+        manager,
+        current.creditPaymentMethodId !== paymentMethodId,
+      );
+      current.creditPaymentMethodId = paymentMethodId;
+      current.creditPaymentMethodLabel = label;
+      current.creditAutoTopUpLastError = null;
+      if (!keepAttempt) current.creditAutoTopUpAttemptKey = null;
+      await repo.save(current);
+    });
     clearCacheByPrefix("org-license");
   }
 
@@ -295,24 +399,86 @@ export class AutoTopUpService {
     organizationId: string,
     teamId: string | undefined,
   ): Promise<AutoTopUpState | null> {
-    const license = await OrganizationLicenseRepository.findOne({
-      where: teamId ? { organizationId, teamId } : { organizationId },
-    });
-    if (!license) return null;
-    const pm = license.creditPaymentMethodId;
-    license.creditPaymentMethodId = null;
-    license.creditPaymentMethodLabel = null;
-    license.creditAutoTopUpEnabled = false;
-    license.creditAutoTopUpLastError = null;
-    license.creditAutoTopUpAttemptKey = null;
-    await OrganizationLicenseRepository.save(license);
-    clearCacheByPrefix("org-license");
-    if (pm) {
-      await StripeService.detachPaymentMethod(pm).catch((err) =>
-        console.error("Auto top-up: could not detach card on Stripe", err),
+    const outcome = await AppDataSource.transaction(async (manager) => {
+      const repo = manager.getRepository(OrganizationLicense);
+      const license = await repo.findOne({
+        where: teamId ? { organizationId, teamId } : { organizationId },
+        lock: { mode: "pessimistic_write" },
+      });
+      if (!license) return null;
+      const keepAttempt = await this.keepReservedAttempt(
+        license,
+        manager,
+        true,
       );
+      const pm = license.creditPaymentMethodId;
+      license.creditPaymentMethodId = null;
+      license.creditPaymentMethodLabel = null;
+      license.creditAutoTopUpEnabled = false;
+      license.creditAutoTopUpLastError = null;
+      if (!keepAttempt) license.creditAutoTopUpAttemptKey = null;
+      await repo.save(license);
+      return {
+        pm,
+        state: {
+          ...this.stateOf(license),
+          ...(await AutoTopUpBudgetService.stateOf(license, manager)),
+        },
+      };
+    });
+    if (!outcome) return null;
+    clearCacheByPrefix("org-license");
+    if (outcome.pm)
+      await StripeService.detachPaymentMethod(outcome.pm).catch((error) =>
+        console.error("Auto top-up: could not detach card on Stripe", {
+          message:
+            error instanceof Error ? error.message : "Unknown provider error",
+        }),
+      );
+    return outcome.state;
+  }
+
+  /** A wallet stopped by its monthly cap may have no balance to run another
+   * review, hence no new debit to trigger a refill. Sweep capped wallets so
+   * month rollover (or raising a cap) does not require new paid usage first.
+   * Empty debits use the SAME row lock / cooldown as normal usage. */
+  private static resumeCursor: string | undefined;
+  static async resumeCappedWallets(): Promise<void> {
+    const cursor = this.resumeCursor;
+    const query = await OrganizationLicenseRepository.createQueryBuilder("l")
+      .where('l."creditAutoTopUpEnabled" = true')
+      .andWhere('l."creditAutoTopUpMonthlyLimitUsd" > 0')
+      .andWhere('l."creditPaymentMethodId" IS NOT NULL')
+      .andWhere('l."creditBalanceUsd" <= l."creditAutoTopUpThresholdUsd"')
+      .orderBy("l.id", "ASC")
+      .take(100);
+    if (cursor) query.andWhere("l.id > :cursor", { cursor });
+    const candidates = await query.getMany();
+    this.resumeCursor =
+      candidates.length === 100
+        ? candidates[candidates.length - 1].id
+        : undefined;
+    for (const license of candidates) {
+      try {
+        if (!decideAutoTopUp(license, license.creditBalanceUsd)) continue;
+        const budget = await AutoTopUpBudgetService.stateOf(license);
+        if (
+          budget.monthlyRemainingUsd! < license.creditAutoTopUpAmountUsd! &&
+          !(license.creditAutoTopUpAttemptKey && budget.monthlyReservedUsd > 0)
+        )
+          continue;
+        await CreditService.debit({
+          organizationId: license.organizationId,
+          teamId: license.teamId,
+          entries: [],
+        });
+      } catch (error) {
+        console.error(`Auto top-up resume failed for license ${license.id}`, {
+          message:
+            error instanceof Error ? error.message : "Unknown sweep error",
+        });
+      }
     }
-    return this.stateOf(license);
   }
 
   /**
@@ -426,6 +592,20 @@ export class AutoTopUpService {
       // settings now: a replay credits what was charged.
       const creditUsd = Number(request.metadata?.creditUsd);
       const chargeUsd = Number(request.metadata?.chargeUsd);
+      if (
+        !(await AutoTopUpBudgetService.reserve(
+          license.id,
+          idempotencyKey,
+          creditUsd,
+          stored?.key === idempotencyKey ||
+            isPreStoredRequestKey(idempotencyKey),
+        ))
+      ) {
+        return {
+          charged: false,
+          reason: "MONTHLY_LIMIT_REACHED_OR_ATTEMPT_SUPERSEDED",
+        };
+      }
       const intent = await StripeService.createAutoTopUpIntent(
         request,
         idempotencyKey,
@@ -440,6 +620,7 @@ export class AutoTopUpService {
         usageKey: `stripe:pi:${intent.id}`,
         metadata: {
           auto: true,
+          autoTopUpAttemptKey: idempotencyKey,
           stripePaymentIntentId: intent.id,
           chargeUsd,
           // What was actually charged, in minor units of `currency`.
@@ -448,17 +629,50 @@ export class AutoTopUpService {
           paymentMethod: license.creditPaymentMethodLabel,
         },
       });
-      // Definitive outcome: release the key so the NEXT dip mints a
-      // fresh one.
-      await AppDataSource.getRepository(OrganizationLicense).update(
-        { id: license.id },
-        {
-          creditAutoTopUpLastError: null,
-          creditAutoTopUpAttemptKey: null,
-          creditAutoTopUpAttemptRequest: null,
-        },
-      );
+      // Also clean up a replay whose purchase was already credited before a
+      // process interruption. applyPurchase releases atomically on first insert.
+      await AutoTopUpBudgetService.release(license.id, idempotencyKey);
+      // A historical request may settle below today's minimum. Pause the
+      // invalid saved configuration now, rather than on the next usage dip.
+      // Compare both key and amount: valid settings saved during Stripe's
+      // response must survive this older attempt's completion.
+      const repo = AppDataSource.getRepository(OrganizationLicense);
+      const reportedError = autoTopUpInvalidAmountMessage(amount);
+      let paused = false;
+      if (CreditService.validatePurchaseAmount(amount) === null) {
+        const written = await repo.update(
+          {
+            id: license.id,
+            creditAutoTopUpAttemptKey: idempotencyKey,
+            creditAutoTopUpAmountUsd: amount,
+            creditAutoTopUpEnabled: true,
+          },
+          {
+            creditAutoTopUpEnabled: false,
+            creditAutoTopUpLastError: reportedError,
+            creditAutoTopUpAttemptKey: null,
+            creditAutoTopUpAttemptRequest: null,
+          },
+        );
+        paused = written?.affected === 1;
+      }
+      if (!paused) {
+        await repo.update(
+          { id: license.id, creditAutoTopUpAttemptKey: idempotencyKey },
+          {
+            creditAutoTopUpLastError: null,
+            creditAutoTopUpAttemptKey: null,
+            creditAutoTopUpAttemptRequest: null,
+          },
+        );
+      }
       clearCacheByPrefix("org-license");
+      if (paused) {
+        this.notifyFailure(
+          { ...license, creditBalanceUsd: applied.balanceUsd },
+          reportedError,
+        );
+      }
       return { charged: true, creditUsd, balanceUsd: applied.balanceUsd };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -497,19 +711,24 @@ export class AutoTopUpService {
       // dangerous move: the key is registered at Stripe, so the earlier
       // request got there, and its outcome is unknown. PARK it — keep the
       // key, switch auto top-up off, say why — instead of charging again.
-      // Re-enabling mints a fresh key, so the customer can recover from the
-      // UI without anyone touching the database.
+      // A reserved attempt stays under its original key on re-enable; a
+      // genuine parameter conflict requires reconciliation by support.
       const parked = isIdempotencyConflict(error);
       // A card that SAID NO is a definitive answer: release the key, so the
       // next dip is a new charge attempt. Anything else (timeout, network,
       // Stripe 5xx) leaves the outcome unknown — keep the key so the retry
       // cannot double-charge a payment already captured.
       const definitive = !parked && isDefinitiveDecline(error);
+      if (definitive) {
+        await AutoTopUpBudgetService.release(license.id, idempotencyKey);
+      }
       const reportedError = parked
         ? AUTO_TOP_UP_PARKED_MESSAGE
         : message.slice(0, 250);
-      await AppDataSource.getRepository(OrganizationLicense).update(
-        { id: license.id },
+      const written = await AppDataSource.getRepository(
+        OrganizationLicense,
+      ).update(
+        { id: license.id, creditAutoTopUpAttemptKey: idempotencyKey },
         {
           creditAutoTopUpLastError: reportedError,
           ...(definitive
@@ -522,6 +741,8 @@ export class AutoTopUpService {
         },
       );
       clearCacheByPrefix("org-license");
+      if (written?.affected === 0)
+        return { charged: false, reason: "ATTEMPT_SUPERSEDED" };
       this.notifyFailure(license, reportedError);
       return {
         charged: false,
@@ -558,7 +779,7 @@ export class AutoTopUpService {
     this.notifyFailure(license, reportedError);
   }
 
-  /** Tell the customer an auto top-up did not happen, and why. */
+  /** Tell the customer why automatic purchases need attention. */
   private static notifyFailure(
     license: OrganizationLicense,
     reportedError: string,

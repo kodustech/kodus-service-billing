@@ -1,5 +1,6 @@
 import cron from "node-cron";
 import { KodusNotificationClient } from "../services/KodusNotificationClient";
+import { AutoTopUpService } from "../services/AutoTopUpService";
 import { OrganizationLicenseService } from "../services/OrganizationLicenseService";
 
 // Rodar a cada 2 horas
@@ -53,3 +54,13 @@ cron.schedule("0 12 * * *", async () => {
     }
   }
 });
+
+// A capped wallet can exhaust its balance, leaving no new debit to trigger
+// a top-up after the UTC month resets. The debit row lock claims each retry.
+cron.schedule("*/5 * * * *", async () => {
+  try {
+    await AutoTopUpService.resumeCappedWallets();
+  } catch (error) {
+    console.error("Auto top-up monthly-limit sweep failed", {message: error instanceof Error ? error.message : "Unknown sweep error"});
+  }
+}, { timezone: "UTC", noOverlap: true });

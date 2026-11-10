@@ -18,6 +18,7 @@ import {
 import { OrganizationLicense } from "../entities/OrganizationLicense";
 import { CreditLedgerRepository } from "../repositories/CreditLedgerRepository";
 import { OrganizationLicenseRepository } from "../repositories/OrganizationLicenseRepository";
+import { AutoTopUpBudgetService } from "./AutoTopUpBudgetService";
 import { KodusNotificationClient } from "./KodusNotificationClient";
 import {
   AutoTopUpService,
@@ -148,7 +149,10 @@ export class CreditService {
       lastPurchaseAt: lastPurchase
         ? new Date(lastPurchase).toISOString()
         : null,
-      autoTopUp: AutoTopUpService.stateOf(license),
+      autoTopUp: {
+        ...AutoTopUpService.stateOf(license),
+        ...(await AutoTopUpBudgetService.stateOf(license)),
+      },
     };
   }
 
@@ -281,6 +285,12 @@ export class CreditService {
         throw error;
       }
 
+      // Release only in the transaction that credits this charge, so no
+      // concurrent reservation can spend capacity between those two writes.
+      const attemptKey = input.metadata?.autoTopUpAttemptKey;
+      if (input.metadata?.auto === true && typeof attemptKey === "string") {
+        await AutoTopUpBudgetService.release(license.id, attemptKey, manager);
+      }
       license.creditBalanceUsd = balanceAfter;
       // A top-up re-arms the one-shot notifications once the balance is
       // back above the threshold, so the next dip alerts again.
