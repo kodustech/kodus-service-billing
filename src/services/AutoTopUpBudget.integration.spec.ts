@@ -694,6 +694,51 @@ integration("monthly auto top-up budget — real PostgreSQL", () => {
     });
   });
 
+  it("can disable and re-enable a reserved legacy amount before reconciling it", async () => {
+    const key = "auto-topup:legacy:reenable";
+    await licenses().update(wallet.id, {
+      creditAutoTopUpAttemptKey: key,
+      creditAutoTopUpAmountUsd: 10,
+    });
+    await reservations().insert({ key, licenseId: wallet.id, creditUsd: 10 });
+    await expect(
+      AutoTopUpService.updateSettings(wallet.organizationId, wallet.teamId, {
+        enabled: false,
+        amountUsd: 50,
+      }),
+    ).resolves.toMatchObject({ ok: true, state: { enabled: false, amountUsd: 10 } });
+    await expect(
+      AutoTopUpService.updateSettings(wallet.organizationId, wallet.teamId, {
+        enabled: true,
+        amountUsd: 10,
+      }),
+    ).resolves.toMatchObject({ ok: true, state: { enabled: true, amountUsd: 10 } });
+    expect((await fresh()).creditAutoTopUpAttemptKey).toBe(key);
+    (StripeService.createAutoTopUpIntent as jest.Mock).mockResolvedValue({
+      id: "pi_legacy_reenabled",
+      status: "succeeded",
+      amount: 1070,
+      currency: "usd",
+    });
+    await expect(AutoTopUpService.charge(wallet.id)).resolves.toMatchObject({
+      charged: true,
+      creditUsd: 10,
+    });
+    expect((await state()).monthlyReservedUsd).toBe(0);
+    await expect(
+      AutoTopUpService.updateSettings(wallet.organizationId, wallet.teamId, {
+        enabled: true,
+        amountUsd: 10,
+      }),
+    ).resolves.toMatchObject({ ok: false, code: "INVALID_AMOUNT" });
+    await expect(
+      AutoTopUpService.updateSettings(wallet.organizationId, wallet.teamId, {
+        enabled: true,
+        amountUsd: 50,
+      }),
+    ).resolves.toMatchObject({ ok: true, state: { amountUsd: 50 } });
+  });
+
   it("releases capacity only for definitive failures", async () => {
     (StripeService.createAutoTopUpIntent as jest.Mock).mockRejectedValue({
       type: "StripeCardError",

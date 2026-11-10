@@ -268,9 +268,22 @@ export class AutoTopUpService {
         if (!license.creditPaymentMethodId) {
           return { ok: false, code: "NO_PAYMENT_METHOD" } as const;
         }
-        const amount = CreditService.validatePurchaseAmount(
-          input.amountUsd ?? license.creditAutoTopUpAmountUsd,
-        );
+        const requestedAmount = input.amountUsd ?? previousAmount;
+        // Re-enabling must let an already reserved request reconcile under
+        // its original amount/key, even if today's minimum has increased.
+        // This exception cannot authorize a new request or change its amount.
+        const resumesReservedRequest =
+          keepAttempt &&
+          requestedAmount === previousAmount &&
+          typeof previousAmount === "number" &&
+          Number.isFinite(previousAmount) &&
+          previousAmount > 0 &&
+          (license.creditAutoTopUpAttemptRequest?.key ===
+            license.creditAutoTopUpAttemptKey ||
+            isPreStoredRequestKey(license.creditAutoTopUpAttemptKey!));
+        const amount = resumesReservedRequest
+          ? previousAmount
+          : CreditService.validatePurchaseAmount(requestedAmount);
         if (amount === null)
           return { ok: false, code: "INVALID_AMOUNT" } as const;
         const thresholdRaw =
