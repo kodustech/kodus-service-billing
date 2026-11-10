@@ -184,6 +184,13 @@ export function decideAutoTopUp(
   return now.getTime() - last >= AUTO_TOP_UP_RETRY_MS;
 }
 
+export class PendingAutoTopUpError extends Error {
+  readonly code = "AUTO_TOP_UP_PENDING";
+  constructor() {
+    super("Resolve the previous charge before changing its amount or card");
+  }
+}
+
 export class AutoTopUpService {
   static stateOf(license: OrganizationLicense): AutoTopUpState {
     return {
@@ -252,7 +259,9 @@ export class AutoTopUpService {
       const keepAttempt = await this.keepReservedAttempt(
         license,
         manager,
-        input.amountUsd !== undefined && input.amountUsd !== previousAmount,
+        input.enabled &&
+          input.amountUsd !== undefined &&
+          input.amountUsd !== previousAmount,
       );
 
       if (input.enabled) {
@@ -297,7 +306,15 @@ export class AutoTopUpService {
         }
         if (typeof input.amountUsd === "number") {
           const amount = CreditService.validatePurchaseAmount(input.amountUsd);
-          if (amount !== null) license.creditAutoTopUpAmountUsd = amount;
+          // Turning off is always allowed. Do not overwrite the old amount
+          // needed to reconcile a legacy request whose payload is not stored.
+          if (
+            amount !== null &&
+            (!keepAttempt ||
+              license.creditAutoTopUpAttemptRequest?.key ===
+                license.creditAutoTopUpAttemptKey)
+          )
+            license.creditAutoTopUpAmountUsd = amount;
         }
       }
       await repo.save(license);
@@ -332,9 +349,7 @@ export class AutoTopUpService {
       license.creditAutoTopUpAttemptRequest?.key !==
         license.creditAutoTopUpAttemptKey
     ) {
-      throw new Error(
-        "AUTO_TOP_UP_PENDING: resolve the previous charge before changing its amount or card",
-      );
+      throw new PendingAutoTopUpError();
     }
     return pending;
   }
@@ -569,6 +584,8 @@ export class AutoTopUpService {
           license.id,
           idempotencyKey,
           creditUsd,
+          stored?.key === idempotencyKey ||
+            isPreStoredRequestKey(idempotencyKey),
         ))
       ) {
         return {
@@ -665,7 +682,9 @@ export class AutoTopUpService {
       const reportedError = parked
         ? AUTO_TOP_UP_PARKED_MESSAGE
         : message.slice(0, 250);
-      await AppDataSource.getRepository(OrganizationLicense).update(
+      const written = await AppDataSource.getRepository(
+        OrganizationLicense,
+      ).update(
         { id: license.id, creditAutoTopUpAttemptKey: idempotencyKey },
         {
           creditAutoTopUpLastError: reportedError,
@@ -679,6 +698,8 @@ export class AutoTopUpService {
         },
       );
       clearCacheByPrefix("org-license");
+      if (written?.affected === 0)
+        return { charged: false, reason: "ATTEMPT_SUPERSEDED" };
       this.notifyFailure(license, reportedError);
       return {
         charged: false,

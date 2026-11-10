@@ -97,6 +97,7 @@ export class AutoTopUpBudgetService {
     licenseId: string,
     key: string,
     creditUsd: number,
+    replay = false,
   ): Promise<boolean> {
     return AppDataSource.transaction(async (manager) => {
       const license = await manager.getRepository(OrganizationLicense).findOne({
@@ -111,9 +112,10 @@ export class AutoTopUpBudgetService {
       const reservations = manager.getRepository(CreditAutoTopUpReservation);
       const existing = await reservations.findOneBy({ key, licenseId });
       if (existing) return existing.creditUsd === creditUsd;
-      // Existing reservations replay the previously authorized request even if
-      // pricing limits changed. NEW attempts obey the current purchase rules.
-      if (CreditService.validatePurchaseAmount(creditUsd) === null)
+      // Replayed requests preserve their previously authorized amount even
+      // when the current minimum changed. New requests obey today's rules.
+      if (!Number.isFinite(creditUsd) || creditUsd <= 0) return false;
+      if (!replay && CreditService.validatePurchaseAmount(creditUsd) === null)
         return false;
       const state = await this.stateOf(license, manager);
       if (

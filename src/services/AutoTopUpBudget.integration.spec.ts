@@ -23,6 +23,15 @@ jest.mock("./StripeService", () => ({
       confirm: true,
       metadata: { creditUsd: String(creditUsd), chargeUsd: String(chargeUsd) },
     })),
+    legacyAutoTopUpRequest: jest.fn(async ({ creditUsd, chargeUsd }) => ({
+      amount: Math.round(chargeUsd * 100),
+      currency: "usd",
+      customer: "cus_test",
+      payment_method: "pm_test",
+      off_session: true,
+      confirm: true,
+      metadata: { creditUsd: String(creditUsd), chargeUsd: String(chargeUsd) },
+    })),
     createAutoTopUpIntent: jest.fn(),
     detachPaymentMethod: jest.fn(async () => undefined),
   },
@@ -142,12 +151,17 @@ integration("monthly auto top-up budget — real PostgreSQL", () => {
       });
       const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
       const path = "/api/billing/credits/auto-topup";
-      const send = (limit: unknown, signed = true) => {
+      const send = (
+        limit: unknown,
+        signed = true,
+        extra: Record<string, unknown> = {},
+      ) => {
         const body = JSON.stringify({
           organizationId: wallet.organizationId,
           teamId: wallet.teamId,
           enabled: true,
           monthlyLimitUsd: limit,
+          ...extra,
         });
         const ts = String(Date.now());
         return fetch(base + path, {
@@ -185,6 +199,24 @@ integration("monthly auto top-up budget — real PostgreSQL", () => {
       expect((await fresh()).creditAutoTopUpMonthlyLimitUsd).toBe(200);
       expect((await send(null)).status).toBe(200);
       expect((await fresh()).creditAutoTopUpMonthlyLimitUsd).toBeNull();
+      await reservations().insert({
+        key: wallet.creditAutoTopUpAttemptKey!,
+        licenseId: wallet.id,
+        creditUsd: 50,
+      });
+      const pending = await send(100, true, { amountUsd: 100 });
+      expect(pending.status).toBe(409);
+      expect(await pending.json()).toEqual({
+        code: "AUTO_TOP_UP_PENDING",
+        error: "Resolve the previous charge before changing its amount or card",
+      });
+      const off = await send(100, true, { enabled: false, amountUsd: 100 });
+      expect(off.status).toBe(200);
+      expect(await off.json()).toMatchObject({
+        enabled: false,
+        amountUsd: 50,
+        monthlyReservedUsd: 50,
+      });
     } finally {
       if (server)
         await new Promise<void>((resolve) => server!.close(() => resolve()));
@@ -581,10 +613,16 @@ integration("monthly auto top-up budget — real PostgreSQL", () => {
         enabled: true,
         amountUsd: 100,
       }),
-    ).rejects.toThrow("AUTO_TOP_UP_PENDING");
+    ).rejects.toMatchObject({
+      code: "AUTO_TOP_UP_PENDING",
+      message: "Resolve the previous charge before changing its amount or card",
+    });
     await expect(
       AutoTopUpService.attachPaymentMethod(await fresh(), "pm_new", "new card"),
-    ).rejects.toThrow("AUTO_TOP_UP_PENDING");
+    ).rejects.toMatchObject({
+      code: "AUTO_TOP_UP_PENDING",
+      message: "Resolve the previous charge before changing its amount or card",
+    });
     expect((await fresh()).creditAutoTopUpAmountUsd).toBe(50);
     expect((await state()).monthlyReservedUsd).toBe(50);
   });
@@ -620,6 +658,40 @@ integration("monthly auto top-up budget — real PostgreSQL", () => {
     } finally {
       charge.mockRestore();
     }
+  });
+
+  it("resolves a legacy authorized $10 attempt through the real budget gate despite today's $15 minimum", async () => {
+    await licenses().update(wallet.id, {
+      creditAutoTopUpAttemptKey: "auto-topup:legacy:1",
+      creditAutoTopUpAmountUsd: 10,
+    });
+    (StripeService.createAutoTopUpIntent as jest.Mock).mockResolvedValue({
+      id: "pi_legacy_budget",
+      status: "succeeded",
+      amount: 1070,
+      currency: "usd",
+    });
+    await expect(AutoTopUpService.charge(wallet.id)).resolves.toMatchObject({
+      charged: true,
+      creditUsd: 10,
+      balanceUsd: 13,
+    });
+    expect(StripeService.createAutoTopUpIntent).toHaveBeenCalledWith(
+      {
+        amount: 1070,
+        currency: "usd",
+        customer: "cus_test",
+        payment_method: "pm_test",
+        off_session: true,
+        confirm: true,
+        metadata: { creditUsd: "10", chargeUsd: "10.7" },
+      },
+      "auto-topup:legacy:1",
+    );
+    expect(await state()).toMatchObject({
+      monthlyPurchasedUsd: 10,
+      monthlyReservedUsd: 0,
+    });
   });
 
   it("releases capacity only for definitive failures", async () => {

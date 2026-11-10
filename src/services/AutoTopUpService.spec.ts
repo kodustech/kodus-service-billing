@@ -942,6 +942,7 @@ describe("monthly limit enforcement at the charge boundary", () => {
 describe("settings transaction cache", () => {
   it("invalidates only after the settings transaction commits", async () => {
     licenseRepo.findOne.mockResolvedValue(license());
+    (clearCacheByPrefix as jest.Mock).mockClear();
     let committed = false;
     (AppDataSource.transaction as jest.Mock).mockImplementationOnce(
       async (cb) => {
@@ -958,5 +959,29 @@ describe("settings transaction cache", () => {
       monthlyLimitUsd: 100,
     });
     expect(committed).toBe(true);
+    expect(clearCacheByPrefix).toHaveBeenCalledTimes(1);
+    expect(clearCacheByPrefix).toHaveBeenCalledWith("org-license");
+  });
+});
+
+describe("failure bookkeeping on superseded attempts", () => {
+  it("does not notify when the attempt-key update no longer matches", async () => {
+    licenseRepo.findOne.mockResolvedValue(
+      license({
+        creditAutoTopUpAttemptRequest: {
+          key: KEY,
+          params: fakeRequest({ creditUsd: 50, chargeUsd: 53.5 }),
+        },
+      }),
+    );
+    licenseUpdate.mockResolvedValueOnce({ affected: 0 } as never);
+    (StripeService.createAutoTopUpIntent as jest.Mock).mockRejectedValue(
+      Object.assign(new Error("declined"), { type: "StripeCardError" }),
+    );
+    await expect(AutoTopUpService.charge("lic-1")).resolves.toEqual({
+      charged: false,
+      reason: "ATTEMPT_SUPERSEDED",
+    });
+    expect(KodusNotificationClient.notifyCreditsLow).not.toHaveBeenCalled();
   });
 });
