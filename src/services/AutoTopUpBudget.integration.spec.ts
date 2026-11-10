@@ -58,6 +58,7 @@ import {
 import { AutoTopUpService } from "./AutoTopUpService";
 import { CreditService } from "./CreditService";
 import { StripeService } from "./StripeService";
+import { KodusNotificationClient } from "./KodusNotificationClient";
 import { AddAutoTopUpMonthlyLimit1794322000000 } from "../migrations/1794322000000-AddAutoTopUpMonthlyLimit";
 
 // Opt-in, disposable local PostgreSQL only. Never run against .env production.
@@ -133,6 +134,7 @@ integration("monthly auto top-up budget — real PostgreSQL", () => {
       }),
     );
     (StripeService.createAutoTopUpIntent as jest.Mock).mockReset();
+    (KodusNotificationClient.notifyCreditsLow as jest.Mock).mockClear();
   });
 
   it("persists the cap through the signed HTTP route and rejects invalid or unsigned writes", async () => {
@@ -725,6 +727,18 @@ integration("monthly auto top-up budget — real PostgreSQL", () => {
       creditUsd: 10,
     });
     expect((await state()).monthlyReservedUsd).toBe(0);
+    expect(await fresh()).toMatchObject({
+      creditAutoTopUpEnabled: false,
+      creditAutoTopUpAttemptKey: null,
+      creditAutoTopUpLastError: expect.stringContaining("Choose a new amount"),
+    });
+    expect(KodusNotificationClient.notifyCreditsLow).toHaveBeenCalledTimes(1);
+    expect(KodusNotificationClient.notifyCreditsLow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        balanceUsd: 13,
+        autoTopUpError: expect.stringContaining("Choose a new amount"),
+      }),
+    );
     await expect(
       AutoTopUpService.updateSettings(wallet.organizationId, wallet.teamId, {
         enabled: true,
@@ -737,6 +751,31 @@ integration("monthly auto top-up budget — real PostgreSQL", () => {
         amountUsd: 50,
       }),
     ).resolves.toMatchObject({ ok: true, state: { amountUsd: 50 } });
+  });
+
+  it("preserves a valid amount saved while the legacy request is settling", async () => {
+    await licenses().update(wallet.id, {
+      creditAutoTopUpAttemptKey: "auto-topup:legacy:concurrent-settings",
+      creditAutoTopUpAmountUsd: 10,
+    });
+    (StripeService.createAutoTopUpIntent as jest.Mock).mockImplementationOnce(async () => {
+      await AutoTopUpService.updateSettings(wallet.organizationId, wallet.teamId, {
+        enabled: true,
+        amountUsd: 50,
+      });
+      return { id: "pi_legacy_new_settings", status: "succeeded", amount: 1070, currency: "usd" };
+    });
+    await expect(AutoTopUpService.charge(wallet.id)).resolves.toMatchObject({
+      charged: true,
+      creditUsd: 10,
+    });
+    expect(await fresh()).toMatchObject({
+      creditAutoTopUpEnabled: true,
+      creditAutoTopUpAmountUsd: 50,
+      creditAutoTopUpAttemptKey: null,
+      creditAutoTopUpLastError: null,
+    });
+    expect(KodusNotificationClient.notifyCreditsLow).not.toHaveBeenCalled();
   });
 
   it("releases capacity only for definitive failures", async () => {

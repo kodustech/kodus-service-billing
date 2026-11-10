@@ -632,17 +632,47 @@ export class AutoTopUpService {
       // Also clean up a replay whose purchase was already credited before a
       // process interruption. applyPurchase releases atomically on first insert.
       await AutoTopUpBudgetService.release(license.id, idempotencyKey);
-      // Definitive outcome: release the key so the NEXT dip mints a
-      // fresh one.
-      await AppDataSource.getRepository(OrganizationLicense).update(
-        { id: license.id, creditAutoTopUpAttemptKey: idempotencyKey },
-        {
-          creditAutoTopUpLastError: null,
-          creditAutoTopUpAttemptKey: null,
-          creditAutoTopUpAttemptRequest: null,
-        },
-      );
+      // A historical request may settle below today's minimum. Pause the
+      // invalid saved configuration now, rather than on the next usage dip.
+      // Compare both key and amount: valid settings saved during Stripe's
+      // response must survive this older attempt's completion.
+      const repo = AppDataSource.getRepository(OrganizationLicense);
+      const reportedError = autoTopUpInvalidAmountMessage(amount);
+      let paused = false;
+      if (CreditService.validatePurchaseAmount(amount) === null) {
+        const written = await repo.update(
+          {
+            id: license.id,
+            creditAutoTopUpAttemptKey: idempotencyKey,
+            creditAutoTopUpAmountUsd: amount,
+            creditAutoTopUpEnabled: true,
+          },
+          {
+            creditAutoTopUpEnabled: false,
+            creditAutoTopUpLastError: reportedError,
+            creditAutoTopUpAttemptKey: null,
+            creditAutoTopUpAttemptRequest: null,
+          },
+        );
+        paused = written?.affected === 1;
+      }
+      if (!paused) {
+        await repo.update(
+          { id: license.id, creditAutoTopUpAttemptKey: idempotencyKey },
+          {
+            creditAutoTopUpLastError: null,
+            creditAutoTopUpAttemptKey: null,
+            creditAutoTopUpAttemptRequest: null,
+          },
+        );
+      }
       clearCacheByPrefix("org-license");
+      if (paused) {
+        this.notifyFailure(
+          { ...license, creditBalanceUsd: applied.balanceUsd },
+          reportedError,
+        );
+      }
       return { charged: true, creditUsd, balanceUsd: applied.balanceUsd };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -749,7 +779,7 @@ export class AutoTopUpService {
     this.notifyFailure(license, reportedError);
   }
 
-  /** Tell the customer an auto top-up did not happen, and why. */
+  /** Tell the customer why automatic purchases need attention. */
   private static notifyFailure(
     license: OrganizationLicense,
     reportedError: string,
