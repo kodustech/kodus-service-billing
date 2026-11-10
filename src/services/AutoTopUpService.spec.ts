@@ -9,7 +9,9 @@ const licenseUpdate = jest.fn(async () => undefined);
 jest.mock("../config/database", () => ({
   AppDataSource: {
     getRepository: () => ({ update: licenseUpdate }),
-    transaction: jest.fn(),
+    transaction: jest.fn(async (cb) =>
+      cb({ getRepository: () => licenseRepo }),
+    ),
   },
 }));
 jest.mock("../repositories/OrganizationLicenseRepository", () => ({
@@ -59,6 +61,15 @@ jest.mock("./CreditService", () => ({
   },
 }));
 
+jest.mock("./AutoTopUpBudgetService", () => ({
+  AutoTopUpBudgetService: {
+    reserve: jest.fn(async () => true),
+    release: jest.fn(async () => undefined),
+    stateOf: jest.fn(async () => ({})),
+  },
+}));
+import { AutoTopUpBudgetService } from "./AutoTopUpBudgetService";
+
 import {
   AUTO_TOP_UP_PARKED_MESSAGE,
   AUTO_TOP_UP_RETRY_MS,
@@ -94,6 +105,10 @@ const license = (over: Record<string, unknown> = {}) => ({
 });
 
 beforeEach(() => {
+  (AutoTopUpBudgetService.reserve as jest.Mock)
+    .mockReset()
+    .mockResolvedValue(true);
+  (AutoTopUpBudgetService.release as jest.Mock).mockClear();
   licenseRepo.findOne.mockReset();
   licenseRepo.save.mockClear();
   licenseUpdate.mockClear();
@@ -280,7 +295,7 @@ describe("charge — the off-session purchase", () => {
     // A charge that went through is definitive: release the key so the
     // NEXT dip mints a fresh one.
     expect(licenseUpdate).toHaveBeenCalledWith(
-      { id: "lic-1" },
+      { id: "lic-1", creditAutoTopUpAttemptKey: KEY },
       {
         creditAutoTopUpLastError: null,
         creditAutoTopUpAttemptKey: null,
@@ -558,12 +573,10 @@ describe("charge — idempotency across retries", () => {
 
     // 2nd attempt (the next sweep): same key, so Stripe returns the very
     // same PaymentIntent instead of creating a second charge.
-    (StripeService.createAutoTopUpIntent as jest.Mock).mockResolvedValueOnce(
-      {
-        id: "pi_same",
-        status: "succeeded",
-      },
-    );
+    (StripeService.createAutoTopUpIntent as jest.Mock).mockResolvedValueOnce({
+      id: "pi_same",
+      status: "succeeded",
+    });
     (CreditService.applyPurchase as jest.Mock).mockResolvedValue({
       applied: true,
       balanceUsd: 53,
@@ -573,7 +586,10 @@ describe("charge — idempotency across retries", () => {
     const keys = (
       StripeService.createAutoTopUpIntent as jest.Mock
     ).mock.calls.map((c) => c[1]);
-    expect(keys).toEqual(["auto-topup:v2:lic-1:111", "auto-topup:v2:lic-1:111"]);
+    expect(keys).toEqual([
+      "auto-topup:v2:lic-1:111",
+      "auto-topup:v2:lic-1:111",
+    ]);
     // The ledger side is idempotent on the PaymentIntent id as well.
     expect(CreditService.applyPurchase).toHaveBeenLastCalledWith(
       expect.objectContaining({ usageKey: "stripe:pi:pi_same" }),
@@ -778,14 +794,18 @@ describe("charge — idempotency across retries", () => {
       },
     },
   ])("drops a key in flight when $name", async ({ run }) => {
-    const lic = license({ creditAutoTopUpAttemptKey: "auto-topup:v2:lic-1:111" });
+    const lic = license({
+      creditAutoTopUpAttemptKey: "auto-topup:v2:lic-1:111",
+    });
     await run(lic as never);
     expect(lic.creditAutoTopUpAttemptKey).toBeNull();
   });
 
   it("does NOT drop the key when the feature is merely switched off", async () => {
     // Turning it off resolves nothing at the payment provider.
-    const lic = license({ creditAutoTopUpAttemptKey: "auto-topup:v2:lic-1:111" });
+    const lic = license({
+      creditAutoTopUpAttemptKey: "auto-topup:v2:lic-1:111",
+    });
     licenseRepo.findOne.mockResolvedValue(lic);
     await AutoTopUpService.updateSettings("org-1", "team-1", {
       enabled: false,
@@ -849,6 +869,67 @@ describe("charge — idempotency across retries", () => {
         definitive
           ? expect.objectContaining({ creditAutoTopUpAttemptKey: null })
           : expect.not.objectContaining({ creditAutoTopUpAttemptKey: null }),
+      );
+    },
+  );
+});
+
+describe("monthly limit enforcement at the charge boundary", () => {
+  it("never calls Stripe when no monthly capacity remains", async () => {
+    licenseRepo.findOne.mockResolvedValue(license());
+    (AutoTopUpBudgetService.reserve as jest.Mock).mockResolvedValue(false);
+    expect(await AutoTopUpService.charge("lic-1")).toMatchObject({
+      charged: false,
+    });
+    expect(StripeService.createAutoTopUpIntent).not.toHaveBeenCalled();
+  });
+
+  it("retains the reservation after an unknown Stripe outcome", async () => {
+    licenseRepo.findOne.mockResolvedValue(license());
+    (StripeService.createAutoTopUpIntent as jest.Mock).mockRejectedValue(
+      new Error("timeout"),
+    );
+    await AutoTopUpService.charge("lic-1");
+    expect(AutoTopUpBudgetService.release).not.toHaveBeenCalled();
+  });
+
+  it("releases the reservation on a definitive decline", async () => {
+    licenseRepo.findOne.mockResolvedValue(license());
+    (StripeService.createAutoTopUpIntent as jest.Mock).mockRejectedValue({
+      type: "StripeCardError",
+    });
+    await AutoTopUpService.charge("lic-1");
+    expect(AutoTopUpBudgetService.release).toHaveBeenCalledWith("lic-1", KEY);
+  });
+
+  it.each([-1, 0.5, NaN, Infinity, "100", true, 100000000])(
+    "rejects invalid monthly limit %p",
+    async (monthlyLimitUsd) => {
+      licenseRepo.findOne.mockResolvedValue(license());
+      expect(
+        await AutoTopUpService.updateSettings("org-1", "team-1", {
+          enabled: false,
+          monthlyLimitUsd: monthlyLimitUsd as number,
+        }),
+      ).toEqual({ ok: false, code: "INVALID_MONTHLY_LIMIT" });
+      expect(licenseRepo.save).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([0, 100, null])(
+    "persists monthly limit %p",
+    async (monthlyLimitUsd) => {
+      licenseRepo.findOne.mockResolvedValue(license());
+      expect(
+        await AutoTopUpService.updateSettings("org-1", "team-1", {
+          enabled: false,
+          monthlyLimitUsd,
+        }),
+      ).toMatchObject({ ok: true });
+      expect(licenseRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          creditAutoTopUpMonthlyLimitUsd: monthlyLimitUsd,
+        }),
       );
     },
   );

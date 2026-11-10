@@ -502,7 +502,7 @@ export class SubscriptionController {
         res: Response,
     ): Promise<Response> {
         try {
-            const { organizationId, teamId, enabled, thresholdUsd, amountUsd } =
+            const { organizationId, teamId, enabled, thresholdUsd, amountUsd, monthlyLimitUsd } =
                 req.body ?? {};
             if (!organizationId) {
                 return res.status(400).json({
@@ -514,6 +514,7 @@ export class SubscriptionController {
                 teamId ? String(teamId) : undefined,
                 {
                     enabled: enabled === true,
+                    monthlyLimitUsd,
                     // JSON null means "leave it": Number(null) would be 0.
                     thresholdUsd:
                         thresholdUsd === undefined || thresholdUsd === null

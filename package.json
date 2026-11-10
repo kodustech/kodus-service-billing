@@ -31,7 +31,8 @@
         "migration:run": "npx typeorm-ts-node-commonjs migration:run -d src/config/database.ts",
         "migration:run:prod": "node lib/src/migration.js",
         "migration:revert": "npx typeorm-ts-node-commonjs migration:revert -d src/config/database.ts",
-        "test": "jest"
+        "test": "jest",
+        "test:credits:integration": "bash scripts/test-auto-topup-budget.sh"
     },
     "dependencies": {
         "axios": "^1.16.0",

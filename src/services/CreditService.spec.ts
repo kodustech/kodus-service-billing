@@ -77,6 +77,12 @@ jest.mock("./KodusNotificationClient", () => ({
   },
 }));
 
+jest.mock("./AutoTopUpBudgetService", () => ({
+  AutoTopUpBudgetService: {
+    stateOf: jest.fn(async () => ({})),
+    release: jest.fn(async () => undefined),
+  },
+}));
 import { CreditService, decideNotification } from "./CreditService";
 import { AutoTopUpService } from "./AutoTopUpService";
 import { KodusNotificationClient } from "./KodusNotificationClient";
