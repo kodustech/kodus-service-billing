@@ -5,7 +5,7 @@ import { PlanType } from "../entities/OrganizationLicense";
 import Stripe from "stripe";
 import validateAdminToken from "../config/utils/adminToken";
 import { PlanCatalogService } from "../services/PlanCatalogService";
-import { AutoTopUpService } from "../services/AutoTopUpService";
+import { AutoTopUpService, PendingAutoTopUpError } from "../services/AutoTopUpService";
 import { CreditService } from "../services/CreditService";
 
 export class SubscriptionController {
@@ -502,7 +502,7 @@ export class SubscriptionController {
         res: Response,
     ): Promise<Response> {
         try {
-            const { organizationId, teamId, enabled, thresholdUsd, amountUsd } =
+            const { organizationId, teamId, enabled, thresholdUsd, amountUsd, monthlyLimitUsd } =
                 req.body ?? {};
             if (!organizationId) {
                 return res.status(400).json({
@@ -514,6 +514,7 @@ export class SubscriptionController {
                 teamId ? String(teamId) : undefined,
                 {
                     enabled: enabled === true,
+                    monthlyLimitUsd,
                     // JSON null means "leave it": Number(null) would be 0.
                     thresholdUsd:
                         thresholdUsd === undefined || thresholdUsd === null
@@ -537,6 +538,9 @@ export class SubscriptionController {
                       : 400;
             return res.status(status).json({ error: code });
         } catch (error) {
+            if (error instanceof PendingAutoTopUpError) {
+                return res.status(409).json({ error: error.message, code: error.code });
+            }
             console.error("Erro ao configurar auto top-up:", error);
             return res
                 .status(500)
@@ -588,6 +592,9 @@ export class SubscriptionController {
             }
             return res.json(state);
         } catch (error) {
+            if (error instanceof PendingAutoTopUpError) {
+                return res.status(409).json({ error: error.message, code: error.code });
+            }
             console.error("Erro ao remover cartão:", error);
             return res.status(500).json({ error: "Erro ao remover cartão" });
         }

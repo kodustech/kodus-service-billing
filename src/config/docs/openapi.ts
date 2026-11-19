@@ -376,6 +376,23 @@ export function buildOpenApiSpec() {
             },
             lastAt: { type: "string", format: "date-time", nullable: true },
             lastError: { type: "string", nullable: true },
+            monthlyLimitUsd: {
+              type: "integer",
+              minimum: 0,
+              maximum: 99999999,
+              nullable: true,
+              description:
+                "Automatic credits per UTC month, before fees. Null means unlimited; zero pauses purchases.",
+            },
+            monthlyPurchasedUsd: { type: "number", minimum: 0 },
+            monthlyReservedUsd: {
+              type: "number",
+              minimum: 0,
+              description: "Unresolved charges, including earlier months.",
+            },
+            monthlyRemainingUsd: { type: "number", minimum: 0, nullable: true },
+            monthlyLimitReached: { type: "boolean" },
+            resetsAt: { type: "string", format: "date-time" },
           },
         },
         CreditAutoTopUpRequestDto: {
@@ -387,6 +404,14 @@ export function buildOpenApiSpec() {
             enabled: { type: "boolean" },
             thresholdUsd: { type: "number", example: 5 },
             amountUsd: { type: "number", example: 50 },
+            monthlyLimitUsd: {
+              type: "integer",
+              minimum: 0,
+              maximum: 99999999,
+              nullable: true,
+              description:
+                "Omit to preserve the cap, null to remove it, zero to pause automatic purchases.",
+            },
           },
         },
         CreditLedgerEntryDto: {

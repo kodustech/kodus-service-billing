@@ -158,6 +158,16 @@ export class OrganizationLicense {
   })
   creditAutoTopUpAmountUsd: number | null;
 
+  /** Monthly automatic credit purchases in USD, excluding markup. Null = unlimited. */
+  @Column({
+    type: "numeric",
+    precision: 14,
+    scale: 6,
+    nullable: true,
+    transformer: numericTransformer,
+  })
+  creditAutoTopUpMonthlyLimitUsd: number | null;
+
   @Column({ type: "varchar", nullable: true })
   creditPaymentMethodId: string | null;
 
