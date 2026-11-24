@@ -81,14 +81,25 @@ describe("ConnectionLicenseService.resolve", () => {
     expect(pool?.connection).toBeNull();
   });
 
-  it("binds the first connection named on a legacy workspace as its primary", async () => {
+  it("bills every connection of a workspace with no bound primary on the workspace row, binding nothing", async () => {
     const w = workspace();
 
-    const pool = await ConnectionLicenseService.resolve("org-1", "team-1", "gh-a");
+    const first = await ConnectionLicenseService.resolve("org-1", "team-1", "gh-a");
+    const other = await ConnectionLicenseService.resolve("org-1", "team-1", "made-up");
 
-    expect(pool?.connection).toBeNull();
-    expect(w.primaryConnectionId).toBe("gh-a");
+    expect(first?.connection).toBeNull();
+    expect(other?.connection).toBeNull();
+    expect(w.primaryConnectionId).toBeNull();
     expect(connections).toHaveLength(0);
+  });
+
+  it("keeps a connection's own licence while no primary is bound", async () => {
+    workspace();
+    connections.push({ id: "cl-b", organizationLicenseId: "lic-1", connectionId: "gl-b" });
+
+    const pool = await ConnectionLicenseService.resolve("org-1", "team-1", "gl-b");
+
+    expect(pool?.connection?.id).toBe("cl-b");
   });
 
   it("gives a connection other than the primary its own free licence, with no Stripe call", async () => {
@@ -131,15 +142,32 @@ describe("ConnectionLicenseService.bindPrimary / release", () => {
     expect(w.primaryConnectionId).toBe("gh-a");
   });
 
-  it("frees the primary slot when that connection is removed, so the next one named takes the workspace plan", async () => {
+  it("binds a workspace's first primary", async () => {
+    const w = workspace();
+
+    await expect(
+      ConnectionLicenseService.bindPrimary("org-1", "team-1", "gh-a"),
+    ).resolves.toEqual({ found: true, primaryConnectionId: "gh-a" });
+    expect(w.primaryConnectionId).toBe("gh-a");
+  });
+
+  it("never makes a connection with its own licence the primary", async () => {
+    const w = workspace();
+    connections.push({ id: "cl-b", organizationLicenseId: "lic-1", connectionId: "gl-b" });
+
+    await ConnectionLicenseService.bindPrimary("org-1", "team-1", "gl-b");
+
+    expect(w.primaryConnectionId).toBeNull();
+  });
+
+  it("frees the primary slot when that connection is removed, until the next one is bound", async () => {
     const w = workspace({ primaryConnectionId: "gh-a" });
 
     await ConnectionLicenseService.release("org-1", "team-1", "gh-a");
     expect(w.primaryConnectionId).toBeNull();
 
-    const pool = await ConnectionLicenseService.resolve("org-1", "team-1", "gl-b");
-    expect(pool?.connection).toBeNull();
-    expect(w.primaryConnectionId).toBe("gl-b");
+    await ConnectionLicenseService.bindPrimary("org-1", "team-1", "gl-c");
+    expect(w.primaryConnectionId).toBe("gl-c");
   });
 
   it("leaves the primary alone when another connection is removed", async () => {

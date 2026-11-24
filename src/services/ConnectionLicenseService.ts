@@ -54,10 +54,12 @@ const clearLicenseCaches = () => {
 export class ConnectionLicenseService {
   /**
    * The seat pool for `connectionId` in a workspace. A call with no
-   * connection keeps today's behaviour (the workspace row). The first
-   * connection named on a workspace with no primary becomes its primary; any
-   * other connection gets its own licence, created on the free plan with no
-   * Stripe call.
+   * connection, or naming the primary, uses the workspace row. Until kodus-ai
+   * binds a primary (server side, before a second connection is added),
+   * every connection without its own licence also uses the workspace row:
+   * that is today's behaviour, and a caller cannot claim the workspace plan
+   * by naming an id first. Once a primary is bound, any other connection
+   * gets its own licence, created on the free plan with no Stripe call.
    */
   static async resolve(
     organizationId: string,
@@ -78,8 +80,7 @@ export class ConnectionLicenseService {
     if (existing) return { workspace, connection: existing };
 
     if (workspace.primaryConnectionId == null) {
-      const bound = await this.claimPrimary(workspace, connectionId);
-      if (bound) return { workspace, connection: null };
+      return { workspace, connection: null };
     }
 
     return { workspace, connection: await this.createFor(workspace, connectionId) };
@@ -113,7 +114,7 @@ export class ConnectionLicenseService {
 
   /**
    * A connection was removed from the workspace. When it was the primary,
-   * the slot frees so the workspace plan follows the next connection named.
+   * the slot frees until kodus-ai binds the next one.
    * A connection's own subscription is left as is: cancelling it is the
    * customer's call, through the portal.
    */
