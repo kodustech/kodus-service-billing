@@ -260,3 +260,57 @@ describe("migrateToFreePlan", () => {
     expect(license.planType).toBe(PlanType.FREE_BYOK);
   });
 });
+
+describe("validateLicense for the whole organization", () => {
+  const findWorkspaces = jest.fn();
+  const findConnections = jest.fn();
+
+  beforeEach(() => {
+    (OrganizationLicenseRepository as any).find = findWorkspaces;
+    (ConnectionLicenseRepository as any).find = findConnections;
+    findWorkspaces.mockReset();
+    findConnections.mockReset();
+  });
+
+  it("answers with the best valid plan among the organization's workspaces and connections", async () => {
+    const free = { ...workspace, planType: PlanType.FREE_BYOK };
+    findWorkspaces.mockResolvedValue([free]);
+    findConnections.mockResolvedValue([
+      { ...gitlabConnection(), planType: PlanType.ENTERPRISE_BYOK },
+    ]);
+    (OrganizationLicenseRepository.findOne as jest.Mock).mockResolvedValue(free);
+
+    await expect(
+      OrganizationLicenseService.validateLicense("org-1", undefined as any),
+    ).resolves.toMatchObject({
+      valid: true,
+      planType: PlanType.ENTERPRISE_BYOK,
+    });
+  });
+
+  it("ignores a connection whose subscription is not valid", async () => {
+    findWorkspaces.mockResolvedValue([workspace]);
+    findConnections.mockResolvedValue([
+      {
+        ...gitlabConnection(),
+        planType: PlanType.ENTERPRISE_MANAGED,
+        subscriptionStatus: SubscriptionStatus.CANCELED,
+      },
+    ]);
+    (OrganizationLicenseRepository.findOne as jest.Mock).mockResolvedValue(workspace);
+
+    await expect(
+      OrganizationLicenseService.validateLicense("org-1", undefined as any),
+    ).resolves.toMatchObject({ planType: PlanType.TEAMS_MANAGED });
+  });
+
+  it("keeps a single-workspace organization on its own row", async () => {
+    findWorkspaces.mockResolvedValue([workspace]);
+    findConnections.mockResolvedValue([]);
+    (OrganizationLicenseRepository.findOne as jest.Mock).mockResolvedValue(workspace);
+
+    await expect(
+      OrganizationLicenseService.validateLicense("org-1", undefined as any),
+    ).resolves.toMatchObject({ planType: PlanType.TEAMS_MANAGED, valid: true });
+  });
+});

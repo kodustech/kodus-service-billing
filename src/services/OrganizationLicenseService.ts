@@ -189,6 +189,21 @@ export const normalizeTrialCredits = (
     return changed;
 };
 
+/** Higher is better: a valid plan beats an invalid one, then by tier. */
+const planRank = (license: {
+    valid: boolean;
+    planType?: PlanType;
+    subscriptionStatus?: SubscriptionStatus;
+}): number => {
+    if (!license.valid) return 0;
+    if (license.subscriptionStatus === SubscriptionStatus.TRIAL) return 2;
+    const plan = license.planType ?? "";
+    if (plan.startsWith("enterprise")) return 5;
+    if (plan.startsWith("teams")) return 4;
+    if (plan === PlanType.FREE_BYOK) return 1;
+    return 1;
+};
+
 type SeatRequest = {
     gitId: string;
     gitTool: GitTool;
@@ -625,6 +640,10 @@ export class OrganizationLicenseService {
         creditBalanceUsd?: number;
         connectionId?: string;
     }> {
+        if (!teamId && !connectionId) {
+            return this.validateOrganization(organizationId);
+        }
+
         if (connectionId) {
             const pool = await ConnectionLicenseService.resolve(
                 organizationId,
@@ -711,6 +730,49 @@ export class OrganizationLicenseService {
             byok: isByokPlan(license.planType),
             creditBalanceUsd,
         };
+    }
+
+    /**
+     * An organization-wide read (no team): the best valid plan among the
+     * organization's workspaces and their Git connections. Organization-level
+     * gates use it, so a plan bought for one connection counts.
+     */
+    private static async validateOrganization(
+        organizationId: string,
+    ): ReturnType<typeof OrganizationLicenseService.validateLicense> {
+        const workspaces = await OrganizationLicenseRepository.find({
+            where: { organizationId },
+            order: { createdAt: "ASC" },
+        });
+        if (!workspaces.length) return { valid: false };
+
+        const connections = await ConnectionLicenseRepository.find({
+            where: { organizationId },
+        });
+        if (workspaces.length === 1 && !connections.length) {
+            return this.validateLicense(organizationId, workspaces[0].teamId);
+        }
+
+        const byId = new Map(workspaces.map((w) => [w.id, w]));
+        const candidates = [
+            ...(await Promise.all(
+                workspaces.map((w) =>
+                    this.validateLicense(organizationId, w.teamId),
+                ),
+            )),
+            ...connections
+                .filter((c) => byId.has(c.organizationLicenseId))
+                .map((c) =>
+                    ConnectionLicenseService.describe(
+                        byId.get(c.organizationLicenseId)!,
+                        c,
+                    ),
+                ),
+        ];
+
+        return candidates.reduce((best, candidate) =>
+            planRank(candidate) > planRank(best) ? candidate : best,
+        );
     }
 
     static async recalculateTrialUnlocks(
