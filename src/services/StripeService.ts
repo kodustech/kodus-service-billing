@@ -13,8 +13,22 @@ import {
   getCreditsPriceId,
 } from "../config/creditPricing";
 import { OrganizationLicense } from "../entities/OrganizationLicense";
+import { ConnectionLicense } from "../entities/ConnectionLicense";
+import { ConnectionLicenseRepository } from "../repositories/ConnectionLicenseRepository";
+import { ConnectionLicenseService } from "./ConnectionLicenseService";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "");
+
+/** A subscription's licence: the workspace row or a connection's own. */
+type SubscriptionOwner =
+  | { kind: "workspace"; license: OrganizationLicense }
+  | { kind: "connection"; license: ConnectionLicense };
+
+const clearLicenseCaches = () => {
+  clearCacheByPrefix("org-license");
+  clearCacheByPrefix("user-license");
+  clearCacheByPrefix("users-license");
+};
 
 /** The credit Price is re-read at most this often (it changes rarely). */
 export const CREDITS_PRICE_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -75,16 +89,19 @@ export class StripeService {
     organizationId: string,
     quantity: number,
     teamId: string,
-    planType: PlanType = PlanType.TEAMS_MANAGED_LEGACY
+    planType: PlanType = PlanType.TEAMS_MANAGED_LEGACY,
+    connectionId?: string
   ): Promise<string> {
-    // Buscar a licença da organização
-    const license = await OrganizationLicenseRepository.findOne({
-      where: { organizationId },
-    });
+    const pool = await ConnectionLicenseService.resolve(
+      organizationId,
+      teamId,
+      connectionId
+    );
 
-    if (!license) {
+    if (!pool) {
       throw new Error("Organização não encontrada");
     }
+    const license = pool.workspace;
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
@@ -100,6 +117,9 @@ export class StripeService {
       ],
       mode: "subscription",
       allow_promotion_codes: true,
+      // One customer per workspace: the wallet's card and every connection's
+      // subscription land on the same invoices and portal.
+      ...(license.stripeCustomerId ? { customer: license.stripeCustomerId } : {}),
       success_url: `${process.env.FRONTEND_URL}/subscription/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${process.env.FRONTEND_URL}/subscription/cancel`,
       client_reference_id: organizationId,
@@ -108,10 +128,66 @@ export class StripeService {
         teamId: teamId,
         licenseId: license.id,
         planType: planType,
+        ...(pool.connection
+          ? {
+              connectionLicenseId: pool.connection.id,
+              connectionId: pool.connection.connectionId,
+            }
+          : {}),
       },
     });
 
+    console.log(
+      JSON.stringify({
+        message: "subscription_checkout_created",
+        organizationId,
+        teamId,
+        licenseId: license.id,
+        connectionLicenseId: pool.connection?.id ?? null,
+        planType,
+        quantity,
+      })
+    );
+
     return session.url || "";
+  }
+
+  /** The licence a subscription is billed on. */
+  private static async findSubscriptionOwner(
+    subscriptionId: string
+  ): Promise<SubscriptionOwner | null> {
+    const workspace = await OrganizationLicenseRepository.findOne({
+      where: { stripeSubscriptionId: subscriptionId },
+    });
+    if (workspace) return { kind: "workspace", license: workspace };
+
+    const connection = await ConnectionLicenseRepository.findOne({
+      where: { stripeSubscriptionId: subscriptionId },
+    });
+    return connection ? { kind: "connection", license: connection } : null;
+  }
+
+  private static async saveOwner(owner: SubscriptionOwner): Promise<void> {
+    if (owner.kind === "workspace") {
+      await OrganizationLicenseRepository.save(owner.license);
+    } else {
+      await ConnectionLicenseRepository.save(owner.license);
+    }
+    clearLicenseCaches();
+  }
+
+  private static notifyOwnerPlan(owner: SubscriptionOwner): void {
+    KodusNotificationClient.notifyPlanChanged({
+      organizationId: owner.license.organizationId,
+      teamId: owner.license.teamId,
+      ...(owner.kind === "connection"
+        ? { connectionId: owner.license.connectionId }
+        : {}),
+      planType: owner.license.planType,
+      subscriptionStatus: owner.license.subscriptionStatus,
+    }).catch(() => {
+      /* defense-in-depth — client swallows internally */
+    });
   }
 
   /**
@@ -462,40 +538,75 @@ export class StripeService {
       return;
     }
 
-    // Atualizar a licença com os dados do Stripe
-    const license = await OrganizationLicenseRepository.findOne({
-      where: { organizationId },
-    });
+    // The session's own licence id names the workspace: an organization
+    // can hold several, and the first one found by organization used to
+    // take another workspace's subscription.
+    const licenseId = session.metadata.licenseId;
+    const workspace = licenseId
+      ? await OrganizationLicenseRepository.findOne({ where: { id: licenseId } })
+      : await OrganizationLicenseRepository.findOne({
+          where: session.metadata.teamId
+            ? { organizationId, teamId: session.metadata.teamId }
+            : { organizationId },
+        });
 
-    if (!license) return;
+    if (!workspace) return;
 
-    license.subscriptionStatus = SubscriptionStatus.ACTIVE;
-    license.stripeCustomerId = session.customer as string;
-    license.stripeSubscriptionId = session.subscription as string;
+    let owner: SubscriptionOwner = { kind: "workspace", license: workspace };
+    const connectionLicenseId = session.metadata.connectionLicenseId;
+    if (connectionLicenseId) {
+      const connection = await ConnectionLicenseRepository.findOne({
+        where: { id: connectionLicenseId, organizationLicenseId: workspace.id },
+      });
+      if (!connection) {
+        console.error(
+          JSON.stringify({
+            message: "subscription_checkout_connection_missing",
+            sessionId: session.id,
+            licenseId: workspace.id,
+            connectionLicenseId,
+          })
+        );
+        return;
+      }
+      owner = { kind: "connection", license: connection };
+      if (!workspace.stripeCustomerId && session.customer) {
+        workspace.stripeCustomerId = session.customer as string;
+        await OrganizationLicenseRepository.save(workspace);
+      }
+    } else {
+      workspace.stripeCustomerId = session.customer as string;
+    }
+
+    owner.license.subscriptionStatus = SubscriptionStatus.ACTIVE;
+    owner.license.stripeSubscriptionId = session.subscription as string;
 
     // Se houver quantity nos line_items
     const lineItems = await stripe.checkout.sessions.listLineItems(session.id);
     if (lineItems.data.length > 0) {
-      license.totalLicenses = lineItems.data[0].quantity || 0;
-      
+      owner.license.totalLicenses = lineItems.data[0].quantity || 0;
+
       // Identificar plano pelo Price ID
       const priceId = lineItems.data[0]?.price?.id;
-      license.planType = getPlanTypeByPriceId(priceId);
+      owner.license.planType = getPlanTypeByPriceId(priceId);
     }
 
-    await OrganizationLicenseRepository.save(license);
+    await this.saveOwner(owner);
 
-    // Limpar cache para garantir que as consultas futuras obtenham dados atualizados
-    clearCacheByPrefix("org-license");
-    clearCacheByPrefix("user-license");
-    clearCacheByPrefix("users-license");
+    console.log(
+      JSON.stringify({
+        message: "subscription_activated",
+        sessionId: session.id,
+        organizationId,
+        licenseId: workspace.id,
+        connectionLicenseId:
+          owner.kind === "connection" ? owner.license.id : null,
+        planType: owner.license.planType,
+        totalLicenses: owner.license.totalLicenses,
+      })
+    );
 
-    KodusNotificationClient.notifyPlanChanged({
-      organizationId: license.organizationId,
-      teamId: license.teamId,
-      planType: license.planType,
-      subscriptionStatus: license.subscriptionStatus,
-    });
+    this.notifyOwnerPlan(owner);
   }
 
   private static async handleCreditPackPaid(
@@ -625,19 +736,15 @@ export class StripeService {
   ): Promise<void> {
     if (!invoice.subscription) return;
 
-    const license = await OrganizationLicenseRepository.findOne({
-      where: { stripeSubscriptionId: invoice.subscription as string },
-    });
+    const owner = await this.findSubscriptionOwner(
+      invoice.subscription as string
+    );
 
-    if (!license) return;
+    if (!owner) return;
+    const license = owner.license;
 
     license.subscriptionStatus = SubscriptionStatus.PAYMENT_FAILED;
-    await OrganizationLicenseRepository.save(license);
-
-    // Limpar cache para garantir que as consultas futuras obtenham dados atualizados
-    clearCacheByPrefix("org-license");
-    clearCacheByPrefix("user-license");
-    clearCacheByPrefix("users-license");
+    await this.saveOwner(owner);
 
     // Fire-and-forget customer notification. The client never throws,
     // but the explicit catch is a second line of defense to guarantee
@@ -664,11 +771,10 @@ export class StripeService {
   private static async handleSubscriptionUpdated(
     subscription: Stripe.Subscription
   ): Promise<void> {
-    const license = await OrganizationLicenseRepository.findOne({
-      where: { stripeSubscriptionId: subscription.id },
-    });
+    const owner = await this.findSubscriptionOwner(subscription.id);
 
-    if (!license) return;
+    if (!owner) return;
+    const license = owner.license;
 
     // Atualizar o status da assinatura
     if (subscription.status === "active") {
@@ -691,44 +797,20 @@ export class StripeService {
       license.totalLicenses = lineItems.data[0].quantity || 0;
     }
 
-    await OrganizationLicenseRepository.save(license);
-
-    // Limpar cache para garantir que as consultas futuras obtenham dados atualizados
-    clearCacheByPrefix("org-license");
-    clearCacheByPrefix("user-license");
-    clearCacheByPrefix("users-license");
-
-    KodusNotificationClient.notifyPlanChanged({
-      organizationId: license.organizationId,
-      teamId: license.teamId,
-      planType: license.planType,
-      subscriptionStatus: license.subscriptionStatus,
-    });
+    await this.saveOwner(owner);
+    this.notifyOwnerPlan(owner);
   }
 
   private static async handleSubscriptionCanceled(
     subscription: Stripe.Subscription
   ): Promise<void> {
-    const license = await OrganizationLicenseRepository.findOne({
-      where: { stripeSubscriptionId: subscription.id },
-    });
+    const owner = await this.findSubscriptionOwner(subscription.id);
 
-    if (!license) return;
+    if (!owner) return;
 
-    license.subscriptionStatus = SubscriptionStatus.CANCELED;
-    await OrganizationLicenseRepository.save(license);
-
-    // Limpar cache para garantir que as consultas futuras obtenham dados atualizados
-    clearCacheByPrefix("org-license");
-    clearCacheByPrefix("user-license");
-    clearCacheByPrefix("users-license");
-
-    KodusNotificationClient.notifyPlanChanged({
-      organizationId: license.organizationId,
-      teamId: license.teamId,
-      planType: license.planType,
-      subscriptionStatus: license.subscriptionStatus,
-    });
+    owner.license.subscriptionStatus = SubscriptionStatus.CANCELED;
+    await this.saveOwner(owner);
+    this.notifyOwnerPlan(owner);
 
     // TODO: Expirar licenças de usuários
   }

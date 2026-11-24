@@ -625,6 +625,85 @@ router.get(
  *             schema:
  *               $ref: "#/components/schemas/ApiErrorDto"
  */
+/**
+ * @openapi
+ * /api/billing/connections/primary:
+ *   post:
+ *     tags: [Billing]
+ *     summary: Bind the workspace's primary Git connection
+ *     description: Names the Git connection whose plan and seats live on the workspace licence. No-op once one is bound.
+ *     operationId: bindPrimaryConnection
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: "#/components/schemas/ConnectionRequestDto"
+ *     responses:
+ *       "200":
+ *         description: The workspace's primary connection.
+ *       "400":
+ *         description: Invalid request.
+ *       "404":
+ *         description: No licence for the workspace.
+ */
+router.post("/connections/primary", async (req, res) => {
+  await SubscriptionController.bindPrimaryConnection(req, res);
+});
+
+/**
+ * @openapi
+ * /api/billing/connections/release:
+ *   post:
+ *     tags: [Billing]
+ *     summary: Release a removed Git connection
+ *     description: Frees the primary slot when the removed connection held it, so the workspace plan follows the next connection named.
+ *     operationId: releaseConnection
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: "#/components/schemas/ConnectionRequestDto"
+ *     responses:
+ *       "200":
+ *         description: Whether the primary slot was freed.
+ *       "400":
+ *         description: Invalid request.
+ */
+router.post("/connections/release", async (req, res) => {
+  await SubscriptionController.releaseConnection(req, res);
+});
+
+/**
+ * @openapi
+ * /api/billing/connections:
+ *   get:
+ *     tags: [Billing]
+ *     summary: List a workspace's connection licences
+ *     description: The primary connection id and, for every other connection, its effective plan and seats.
+ *     operationId: listConnectionLicenses
+ *     parameters:
+ *       - in: query
+ *         name: organizationId
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: teamId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       "200":
+ *         description: Connection licences.
+ *       "400":
+ *         description: Invalid request.
+ */
+router.get("/connections", async (req, res) => {
+  await SubscriptionController.listConnectionLicenses(req, res);
+});
+
 router.get("/portal/:organizationId/:teamId", async (req, res) => {
   await SubscriptionController.getCustomerPortalUrl(req, res);
 });

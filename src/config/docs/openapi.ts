@@ -230,6 +230,15 @@ export function buildOpenApiSpec() {
             byok: { type: "boolean", example: false },
           },
         },
+        ConnectionRequestDto: {
+          type: "object",
+          required: ["organizationId", "teamId", "connectionId"],
+          properties: {
+            organizationId: { type: "string", example: "org_123" },
+            teamId: { type: "string", example: "team_456" },
+            connectionId: { type: "string", example: "integration_789" },
+          },
+        },
         CreateCheckoutSessionRequestDto: {
           type: "object",
           required: ["organizationId", "quantity", "teamId"],
@@ -238,6 +247,7 @@ export function buildOpenApiSpec() {
             quantity: { type: "integer", example: 5 },
             teamId: { type: "string", example: "team_456" },
             planType: { $ref: "#/components/schemas/PlanType" },
+            connectionId: { type: "string", example: "integration_789" },
           },
         },
         CheckoutSessionResponseDto: {

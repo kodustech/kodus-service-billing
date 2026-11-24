@@ -1,0 +1,225 @@
+import "reflect-metadata";
+
+const created: Array<Record<string, any>> = [];
+const workspaces: Array<Record<string, any>> = [];
+const connections: Array<Record<string, any>> = [];
+
+const find = (rows: Array<Record<string, any>>, where: Record<string, any>) =>
+  rows.find((row) =>
+    Object.entries(where).every(([key, value]) => row[key] === value),
+  ) ?? null;
+
+jest.mock("stripe", () =>
+  jest.fn().mockImplementation(() => ({
+    checkout: {
+      sessions: {
+        create: jest.fn(async (args: Record<string, any>) => {
+          created.push(args);
+          return { url: "https://checkout.stripe.com/c/pay/cs_test_1" };
+        }),
+        listLineItems: jest.fn(async () => ({
+          data: [{ quantity: 3, price: { id: "price_teams_byok" } }],
+        })),
+      },
+    },
+    subscriptionItems: {
+      list: jest.fn(async () => ({ data: [{ quantity: 5 }] })),
+    },
+  })),
+);
+jest.mock("../config/planPricing", () => ({
+  getPriceIdForPlan: jest.fn(() => "price_teams_byok"),
+  getPlanTypeByPriceId: jest.fn(() => "teams_byok"),
+}));
+jest.mock("../repositories/OrganizationLicenseRepository", () => ({
+  OrganizationLicenseRepository: {
+    findOne: jest.fn(async ({ where }: any) => find(workspaces, where)),
+    save: jest.fn(async (x: unknown) => x),
+  },
+}));
+jest.mock("../repositories/ConnectionLicenseRepository", () => ({
+  ConnectionLicenseRepository: {
+    findOne: jest.fn(async ({ where }: any) => find(connections, where)),
+    save: jest.fn(async (x: unknown) => x),
+  },
+}));
+jest.mock("./ConnectionLicenseService", () => ({
+  ConnectionLicenseService: {
+    resolve: jest.fn(async (organizationId: string, teamId: string, connectionId?: string) => {
+      const workspace = find(workspaces, { organizationId, teamId });
+      if (!workspace) return null;
+      const connection =
+        connectionId && connectionId !== workspace.primaryConnectionId
+          ? find(connections, { connectionId })
+          : null;
+      return { workspace, connection };
+    }),
+  },
+}));
+jest.mock("../config/utils/cache", () => ({ clearCacheByPrefix: jest.fn() }));
+jest.mock("./KodusNotificationClient", () => ({
+  KodusNotificationClient: {
+    notifyPlanChanged: jest.fn(async () => undefined),
+    notifyPaymentFailed: jest.fn(async () => undefined),
+  },
+}));
+jest.mock("./CreditService", () => ({ CreditService: {} }));
+jest.mock("./AutoTopUpService", () => ({ AutoTopUpService: {} }));
+
+import { StripeService } from "./StripeService";
+import { PlanType, SubscriptionStatus } from "../entities/OrganizationLicense";
+import { KodusNotificationClient } from "./KodusNotificationClient";
+
+beforeEach(() => {
+  created.length = 0;
+  workspaces.length = 0;
+  connections.length = 0;
+  workspaces.push(
+    {
+      id: "lic-other-team",
+      organizationId: "org-1",
+      teamId: "team-0",
+      subscriptionStatus: SubscriptionStatus.ACTIVE,
+      planType: PlanType.TEAMS_MANAGED,
+      totalLicenses: 9,
+    },
+    {
+      id: "lic-1",
+      organizationId: "org-1",
+      teamId: "team-1",
+      subscriptionStatus: SubscriptionStatus.TRIAL,
+      planType: PlanType.TEAMS_MANAGED,
+      totalLicenses: 0,
+      stripeCustomerId: "cus_1",
+      primaryConnectionId: "gh-a",
+    },
+  );
+  connections.push({
+    id: "cl-b",
+    organizationLicenseId: "lic-1",
+    organizationId: "org-1",
+    teamId: "team-1",
+    connectionId: "gl-b",
+    subscriptionStatus: SubscriptionStatus.ACTIVE,
+    planType: PlanType.FREE_BYOK,
+    stripeSubscriptionId: null,
+    totalLicenses: 0,
+  });
+});
+
+describe("subscription checkout per Git connection", () => {
+  it("opens checkout for the workspace that asked, not the organization's first one", async () => {
+    await StripeService.createCheckoutSession("org-1", 2, "team-1", PlanType.TEAMS_BYOK);
+
+    expect(created[0].metadata).toMatchObject({
+      licenseId: "lic-1",
+      teamId: "team-1",
+    });
+    expect(created[0].metadata.connectionLicenseId).toBeUndefined();
+  });
+
+  it("opens checkout for a connection's own licence, on the workspace's Stripe customer", async () => {
+    await StripeService.createCheckoutSession(
+      "org-1",
+      2,
+      "team-1",
+      PlanType.TEAMS_BYOK,
+      "gl-b",
+    );
+
+    expect(created[0].metadata).toMatchObject({
+      licenseId: "lic-1",
+      connectionLicenseId: "cl-b",
+      connectionId: "gl-b",
+    });
+    expect(created[0].customer).toBe("cus_1");
+  });
+
+  it("activates the connection's licence when its checkout completes, leaving the workspace trial alone", async () => {
+    await StripeService.handleWebhookEvent({
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_1",
+          customer: "cus_1",
+          subscription: "sub_b",
+          metadata: {
+            organizationId: "org-1",
+            teamId: "team-1",
+            licenseId: "lic-1",
+            connectionLicenseId: "cl-b",
+          },
+        },
+      },
+    } as any);
+
+    expect(connections[0]).toMatchObject({
+      subscriptionStatus: SubscriptionStatus.ACTIVE,
+      stripeSubscriptionId: "sub_b",
+      totalLicenses: 3,
+      planType: "teams_byok",
+    });
+    expect(workspaces[1]).toMatchObject({
+      subscriptionStatus: SubscriptionStatus.TRIAL,
+      totalLicenses: 0,
+    });
+    expect(KodusNotificationClient.notifyPlanChanged).toHaveBeenCalledWith(
+      expect.objectContaining({ teamId: "team-1", connectionId: "gl-b" }),
+    );
+  });
+
+  it("activates the workspace named by the session's licence id, not another workspace of the org", async () => {
+    await StripeService.handleWebhookEvent({
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_2",
+          customer: "cus_1",
+          subscription: "sub_a",
+          metadata: { organizationId: "org-1", teamId: "team-1", licenseId: "lic-1" },
+        },
+      },
+    } as any);
+
+    expect(workspaces[1]).toMatchObject({
+      subscriptionStatus: SubscriptionStatus.ACTIVE,
+      stripeSubscriptionId: "sub_a",
+      totalLicenses: 3,
+    });
+    expect(workspaces[0].totalLicenses).toBe(9);
+  });
+
+  it("follows a connection's subscription updates and cancellation", async () => {
+    connections[0].stripeSubscriptionId = "sub_b";
+    connections[0].planType = PlanType.TEAMS_BYOK;
+
+    await StripeService.handleWebhookEvent({
+      type: "customer.subscription.updated",
+      data: { object: { id: "sub_b", status: "past_due" } },
+    } as any);
+    expect(connections[0]).toMatchObject({
+      subscriptionStatus: SubscriptionStatus.PAYMENT_FAILED,
+      totalLicenses: 5,
+    });
+
+    await StripeService.handleWebhookEvent({
+      type: "customer.subscription.deleted",
+      data: { object: { id: "sub_b" } },
+    } as any);
+    expect(connections[0].subscriptionStatus).toBe(SubscriptionStatus.CANCELED);
+  });
+
+  it("marks a connection's subscription failed on a failed invoice", async () => {
+    connections[0].stripeSubscriptionId = "sub_b";
+
+    await StripeService.handleWebhookEvent({
+      type: "invoice.payment_failed",
+      data: { object: { subscription: "sub_b", amount_due: 100, currency: "usd" } },
+    } as any);
+
+    expect(connections[0].subscriptionStatus).toBe(SubscriptionStatus.PAYMENT_FAILED);
+    expect(KodusNotificationClient.notifyPaymentFailed).toHaveBeenCalledWith(
+      expect.objectContaining({ teamId: "team-1" }),
+    );
+  });
+});

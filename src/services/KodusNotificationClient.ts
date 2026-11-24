@@ -55,6 +55,8 @@ export class KodusNotificationClient {
   static async notifyPlanChanged(input: {
     organizationId: string;
     teamId?: string;
+    /** Set when the plan belongs to one Git connection of the workspace. */
+    connectionId?: string;
     planType?: string;
     subscriptionStatus?: string;
   }): Promise<void> {
