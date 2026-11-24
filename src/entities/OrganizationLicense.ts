@@ -220,6 +220,14 @@ export class OrganizationLicense {
   @Column({ nullable: true })
   stripeSubscriptionId?: string;
 
+  /**
+   * The Git connection (kodus-ai integration id) whose plan and seats live on
+   * this row. Null until kodus-ai first names one; connections other than
+   * this one are billed on `connection_licenses`.
+   */
+  @Column({ type: "varchar", nullable: true })
+  primaryConnectionId: string | null;
+
   @Column({ default: 0 })
   totalLicenses: number;
 

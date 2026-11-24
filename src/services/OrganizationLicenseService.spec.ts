@@ -20,6 +20,9 @@ jest.mock("../repositories/OrganizationLicenseRepository", () => ({
         save: jest.fn(async (x: unknown) => x),
     },
 }));
+jest.mock("../repositories/ConnectionLicenseRepository", () => ({
+    ConnectionLicenseRepository: {},
+}));
 jest.mock("../repositories/UserLicenseRepository", () => ({
     UserLicenseRepository: {},
 }));
