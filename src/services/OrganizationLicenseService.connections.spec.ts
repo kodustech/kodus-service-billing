@@ -181,14 +181,15 @@ describe("seats per Git connection", () => {
       },
     });
 
-    const result = await OrganizationLicenseService.assignLicensesToUsers(
-      "org-1",
-      "team-1",
-      [{ gitId: "42", gitTool: GitTool.GITLAB, licenseStatus: LicenseStatus.ACTIVE }],
-      "gl-b",
-    ).catch((error: Error) => ({ successful: [], failed: [], error }));
-
-    expect(result.successful).toEqual([]);
+    await expect(
+      OrganizationLicenseService.assignLicensesToUsers(
+        "org-1",
+        "team-1",
+        [{ gitId: "42", gitTool: GitTool.GITLAB, licenseStatus: LicenseStatus.ACTIVE }],
+        "gl-b",
+      ),
+    ).rejects.toThrow("Esta conexão não possui licença ativa");
+    expect(seats).toHaveLength(0);
   });
 
   it("creates the connection's licence when assigning its first seat", async () => {
@@ -259,7 +260,8 @@ describe("seats per Git connection", () => {
       workspace,
       connection: { ...unsaved, planType: PlanType.FREE_BYOK, stripeSubscriptionId: null },
     });
-    seats.push({ git_id: "42", licenseStatus: LicenseStatus.ACTIVE, connectionLicenseId: "cl-x" });
+    // No connection id on the seat: only the unsaved-licence guard keeps it from matching.
+    seats.push({ git_id: "42", licenseStatus: LicenseStatus.ACTIVE });
 
     await expect(
       OrganizationLicenseService.checkUserLicense("org-1", "42", "team-1", "gl-b"),

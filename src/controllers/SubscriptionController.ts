@@ -82,7 +82,7 @@ export class SubscriptionController {
                 planType || PlanType.TEAMS_MANAGED_LEGACY,
                 connectionIdOf(connectionId),
             );
-            if (!checkoutUrl) {
+            if (checkoutUrl === null) {
                 return res.status(404).json({ error: "LICENSE_NOT_FOUND" });
             }
 

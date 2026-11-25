@@ -9,13 +9,16 @@ const find = (rows: Array<Record<string, any>>, where: Record<string, any>) =>
     Object.entries(where).every(([key, value]) => row[key] === value),
   ) ?? null;
 
+const CHECKOUT_URL = "https://checkout.stripe.com/c/pay/cs_test_1";
+let mockCheckoutUrl: string | null = CHECKOUT_URL;
+
 jest.mock("stripe", () =>
   jest.fn().mockImplementation(() => ({
     checkout: {
       sessions: {
         create: jest.fn(async (args: Record<string, any>) => {
           created.push(args);
-          return { url: "https://checkout.stripe.com/c/pay/cs_test_1" };
+          return { url: mockCheckoutUrl };
         }),
         listLineItems: jest.fn(async () => ({
           data: [{ quantity: 3, price: { id: "price_teams_byok" } }],
@@ -124,6 +127,17 @@ describe("subscription checkout per Git connection", () => {
       StripeService.createCheckoutSession("org-1", 2, "team-unknown", PlanType.TEAMS_BYOK),
     ).resolves.toBeNull();
     expect(created).toHaveLength(0);
+  });
+
+  it("fails rather than answer an empty URL when Stripe returns a session without one", async () => {
+    mockCheckoutUrl = null;
+    try {
+      await expect(
+        StripeService.createCheckoutSession("org-1", 2, "team-1", PlanType.TEAMS_BYOK),
+      ).rejects.toThrow("without a checkout URL");
+    } finally {
+      mockCheckoutUrl = CHECKOUT_URL;
+    }
   });
 
   it("creates the connection's licence when opening its checkout", async () => {

@@ -148,7 +148,10 @@ export class StripeService {
       })
     );
 
-    return session.url || "";
+    if (!session.url) {
+      throw new Error("Stripe created a checkout session without a checkout URL");
+    }
+    return session.url;
   }
 
   /** The licence a subscription is billed on. */
