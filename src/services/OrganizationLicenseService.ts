@@ -213,7 +213,15 @@ export class OrganizationLicenseService {
             );
         }
 
-        const trialDays = parseInt(process.env.TRIAL_DAYS || "14");
+        // TRIAL_DURATION is the key the deploy scripts fetch from SSM
+        // (scripts/fetch-env.*.sh). A value outside 1..365 days (missing,
+        // non-numeric, or in the wrong unit, e.g. seconds) falls back to 14 so
+        // a bad env never stamps a past, invalid or effectively permanent trial.
+        const rawTrialDays = parseInt(process.env.TRIAL_DURATION || "14", 10);
+        const trialDays =
+            Number.isNaN(rawTrialDays) || rawTrialDays < 1 || rawTrialDays > 365
+                ? 14
+                : rawTrialDays;
         const trialEnd = new Date();
         trialEnd.setDate(trialEnd.getDate() + trialDays);
 
