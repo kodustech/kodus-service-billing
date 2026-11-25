@@ -34,6 +34,22 @@ const TRIAL_REVIEW_CREDITS_INCLUDED = Number.isNaN(rawTrialReviewCredits)
     ? 5
     : Math.max(0, rawTrialReviewCredits);
 
+// TRIAL_DURATION is the key the deploy scripts fetch from SSM
+// (scripts/fetch-env.*.sh). A value outside 1..365 days (missing, non-numeric,
+// or in the wrong unit, e.g. seconds) falls back to 14 so a bad env never
+// stamps a past, invalid or effectively permanent trial.
+const DEFAULT_TRIAL_DAYS = 14;
+const MAX_TRIAL_DAYS = 365;
+const getTrialDays = (): number => {
+    const raw = parseInt(
+        process.env.TRIAL_DURATION || String(DEFAULT_TRIAL_DAYS),
+        10,
+    );
+    return Number.isNaN(raw) || raw < 1 || raw > MAX_TRIAL_DAYS
+        ? DEFAULT_TRIAL_DAYS
+        : raw;
+};
+
 const isByokPlan = (planType?: PlanType): boolean =>
     Boolean(planType && planType.includes("byok"));
 
@@ -197,6 +213,21 @@ const buildTrialCreditPayload = (license: OrganizationLicense) => ({
 });
 
 export class OrganizationLicenseService {
+    /**
+     * What a trial started now gets: its length and the Kodus-paid reviews.
+     * For screens shown before the trial exists; a running trial reads its
+     * own trialStart/trialEnd and credit fields instead.
+     */
+    static getTrialTerms(): {
+        trialDays: number;
+        trialReviewCreditsIncluded: number;
+    } {
+        return {
+            trialDays: getTrialDays(),
+            trialReviewCreditsIncluded: TRIAL_REVIEW_CREDITS_INCLUDED,
+        };
+    }
+
     static async createTrialLicense(
         organizationId: string,
         teamId: string,
@@ -213,17 +244,8 @@ export class OrganizationLicenseService {
             );
         }
 
-        // TRIAL_DURATION is the key the deploy scripts fetch from SSM
-        // (scripts/fetch-env.*.sh). A value outside 1..365 days (missing,
-        // non-numeric, or in the wrong unit, e.g. seconds) falls back to 14 so
-        // a bad env never stamps a past, invalid or effectively permanent trial.
-        const rawTrialDays = parseInt(process.env.TRIAL_DURATION || "14", 10);
-        const trialDays =
-            Number.isNaN(rawTrialDays) || rawTrialDays < 1 || rawTrialDays > 365
-                ? 14
-                : rawTrialDays;
         const trialEnd = new Date();
-        trialEnd.setDate(trialEnd.getDate() + trialDays);
+        trialEnd.setDate(trialEnd.getDate() + getTrialDays());
 
         const license = OrganizationLicenseRepository.create({
             organizationId,
@@ -575,6 +597,7 @@ export class OrganizationLicenseService {
         valid: boolean;
         subscriptionStatus?: SubscriptionStatus;
         planType?: PlanType;
+        trialStart?: Date;
         trialEnd?: Date;
         numberOfLicenses?: number;
         stripeCustomerId?: string;
@@ -637,6 +660,7 @@ export class OrganizationLicenseService {
                 valid: true,
                 subscriptionStatus: SubscriptionStatus.TRIAL,
                 planType: license.planType,
+                trialStart: license.createdAt,
                 trialEnd: license.trialEnd,
                 stripeCustomerId: license?.stripeCustomerId,
                 ...buildTrialCreditPayload(license),
@@ -667,6 +691,7 @@ export class OrganizationLicenseService {
         valid: boolean;
         subscriptionStatus?: SubscriptionStatus;
         planType?: PlanType;
+        trialStart?: Date;
         trialEnd?: Date;
         byok?: boolean;
         trialReviewCreditsTotal?: number;
@@ -704,6 +729,7 @@ export class OrganizationLicenseService {
                     valid: false,
                     subscriptionStatus: SubscriptionStatus.TRIAL,
                     planType: license.planType,
+                    trialStart: license.createdAt,
                     trialEnd: license.trialEnd,
                     ...buildTrialCreditPayload(license),
                 };
@@ -720,6 +746,7 @@ export class OrganizationLicenseService {
                     valid: true,
                     subscriptionStatus: SubscriptionStatus.TRIAL,
                     planType: license.planType,
+                    trialStart: license.createdAt,
                     trialEnd: license.trialEnd,
                     ...buildTrialCreditPayload(license),
                 };
@@ -809,6 +836,7 @@ export class OrganizationLicenseService {
                 valid: true,
                 subscriptionStatus: SubscriptionStatus.TRIAL,
                 planType: license.planType,
+                trialStart: license.createdAt,
                 trialEnd: license.trialEnd,
                 ...buildTrialCreditPayload(license),
                 appliedUnlocks,

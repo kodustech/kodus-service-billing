@@ -225,6 +225,26 @@ router.get("/plans", async (req, res) => {
 
 /**
  * @openapi
+ * /api/billing/trial-terms:
+ *   get:
+ *     tags: [Billing]
+ *     summary: Terms of a trial started now
+ *     description: Length and Kodus-paid reviews a new trial gets, for screens shown before the trial exists. A running trial reads trialStart/trialEnd from validate-org-license instead.
+ *     operationId: getTrialTerms
+ *     responses:
+ *       "200":
+ *         description: Trial terms.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/TrialTermsDto"
+ */
+router.get("/trial-terms", (req, res) => {
+  SubscriptionController.getTrialTerms(req, res);
+});
+
+/**
+ * @openapi
  * /api/billing/validate-org-license:
  *   get:
  *     tags: [Billing]

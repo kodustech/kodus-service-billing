@@ -232,6 +232,59 @@ describe("OrganizationLicenseService.createTrialLicense", () => {
     });
 });
 
+describe("OrganizationLicenseService.getTrialTerms", () => {
+    const original = process.env.TRIAL_DURATION;
+    afterEach(() => {
+        if (original === undefined) delete process.env.TRIAL_DURATION;
+        else process.env.TRIAL_DURATION = original;
+    });
+
+    it("reports the length a trial started now gets, read on every call", () => {
+        process.env.TRIAL_DURATION = "7";
+        expect(OrganizationLicenseService.getTrialTerms()).toEqual({
+            trialDays: 7,
+            trialReviewCreditsIncluded: 5,
+        });
+
+        process.env.TRIAL_DURATION = "21";
+        expect(OrganizationLicenseService.getTrialTerms().trialDays).toBe(21);
+    });
+
+    it("falls back to 14 days on the same values createTrialLicense rejects", () => {
+        process.env.TRIAL_DURATION = "2592000";
+        expect(OrganizationLicenseService.getTrialTerms().trialDays).toBe(14);
+    });
+});
+
+describe("OrganizationLicenseService.validateLicense", () => {
+    const repo = OrganizationLicenseRepository as unknown as {
+        findOne: jest.Mock;
+    };
+
+    it("returns a running trial's window: trialStart is when the license was created", async () => {
+        const createdAt = new Date("2026-11-20T10:00:00Z");
+        const trialEnd = futureTrialEnd();
+        repo.findOne.mockResolvedValue({
+            organizationId: "org",
+            teamId: "team",
+            subscriptionStatus: SubscriptionStatus.TRIAL,
+            planType: "teams_managed",
+            createdAt,
+            trialEnd,
+            trialReviewCreditsTotal: null,
+        });
+
+        const result = await OrganizationLicenseService.validateLicense(
+            "org",
+            "team",
+        );
+
+        expect(result.subscriptionStatus).toBe(SubscriptionStatus.TRIAL);
+        expect(result.trialStart).toEqual(createdAt);
+        expect(result.trialEnd).toEqual(trialEnd);
+    });
+});
+
 describe("OrganizationLicenseService.recalculateTrialUnlocks", () => {
     beforeEach(() => txRepo.findOne.mockReset());
 
