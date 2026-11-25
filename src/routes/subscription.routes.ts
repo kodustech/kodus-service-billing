@@ -104,6 +104,12 @@ router.post("/trial", async (req, res) => {
  *           application/json:
  *             schema:
  *               $ref: "#/components/schemas/ApiErrorDto"
+ *       "404":
+ *         description: No licence for this workspace.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: "#/components/schemas/ApiErrorDto"
  *       "500":
  *         description: Internal server error.
  *         content:

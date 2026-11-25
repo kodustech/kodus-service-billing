@@ -67,6 +67,7 @@ jest.mock("./CreditService", () => ({ CreditService: {} }));
 jest.mock("./AutoTopUpService", () => ({ AutoTopUpService: {} }));
 
 import { StripeService } from "./StripeService";
+import { ConnectionLicenseService } from "./ConnectionLicenseService";
 import { PlanType, SubscriptionStatus } from "../entities/OrganizationLicense";
 import { KodusNotificationClient } from "./KodusNotificationClient";
 
@@ -116,6 +117,21 @@ describe("subscription checkout per Git connection", () => {
       teamId: "team-1",
     });
     expect(created[0].metadata.connectionLicenseId).toBeUndefined();
+  });
+
+  it("opens no checkout for a workspace billing has never seen", async () => {
+    await expect(
+      StripeService.createCheckoutSession("org-1", 2, "team-unknown", PlanType.TEAMS_BYOK),
+    ).resolves.toBeNull();
+    expect(created).toHaveLength(0);
+  });
+
+  it("creates the connection's licence when opening its checkout", async () => {
+    await StripeService.createCheckoutSession("org-1", 2, "team-1", PlanType.TEAMS_BYOK, "gl-b");
+
+    expect(ConnectionLicenseService.resolve).toHaveBeenCalledWith("org-1", "team-1", "gl-b", {
+      create: true,
+    });
   });
 
   it("opens checkout for a connection's own licence, on the workspace's Stripe customer", async () => {

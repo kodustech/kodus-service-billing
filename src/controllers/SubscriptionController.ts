@@ -13,6 +13,12 @@ import { ConnectionLicenseService } from "../services/ConnectionLicenseService";
 const connectionIdOf = (value: unknown): string | undefined =>
     typeof value === "string" && value.trim() ? value.trim() : undefined;
 
+/** Name and message only: a raw error can carry request details. */
+const errorSummary = (error: unknown) =>
+    error instanceof Error
+        ? { name: error.name, message: error.message }
+        : { message: String(error) };
+
 export class SubscriptionController {
     static async createTrial(req: Request, res: Response): Promise<Response> {
         try {
@@ -76,6 +82,9 @@ export class SubscriptionController {
                 planType || PlanType.TEAMS_MANAGED_LEGACY,
                 connectionIdOf(connectionId),
             );
+            if (!checkoutUrl) {
+                return res.status(404).json({ error: "LICENSE_NOT_FOUND" });
+            }
 
             return res.json({ url: checkoutUrl });
         } catch (error) {
@@ -369,7 +378,7 @@ export class SubscriptionController {
             }
             return res.json(result);
         } catch (error) {
-            console.error("Error binding the primary connection:", error);
+            console.error("Error binding the primary connection:", errorSummary(error));
             return res
                 .status(500)
                 .json({ error: "Error binding the primary connection" });
@@ -397,7 +406,7 @@ export class SubscriptionController {
                 ),
             );
         } catch (error) {
-            console.error("Error releasing the connection:", error);
+            console.error("Error releasing the connection:", errorSummary(error));
             return res
                 .status(500)
                 .json({ error: "Error releasing the connection" });
@@ -434,7 +443,7 @@ export class SubscriptionController {
                 ),
             });
         } catch (error) {
-            console.error("Error listing connection licences:", error);
+            console.error("Error listing connection licences:", errorSummary(error));
             return res
                 .status(500)
                 .json({ error: "Error listing connection licences" });

@@ -59,12 +59,15 @@ export class ConnectionLicenseService {
    * every connection without its own licence also uses the workspace row:
    * that is today's behaviour, and a caller cannot claim the workspace plan
    * by naming an id first. Once a primary is bound, any other connection
-   * gets its own licence, created on the free plan with no Stripe call.
+   * gets its own licence on the free plan, with no Stripe call. Only
+   * `create` writes it (seats, checkout); a read gets an unsaved free
+   * licence, so read calls never add rows.
    */
   static async resolve(
     organizationId: string,
     teamId: string,
     connectionId?: string,
+    { create = false }: { create?: boolean } = {},
   ): Promise<SeatPool | null> {
     const workspace = await OrganizationLicenseRepository.findOne({
       where: { organizationId, teamId },
@@ -83,7 +86,12 @@ export class ConnectionLicenseService {
       return { workspace, connection: null };
     }
 
-    return { workspace, connection: await this.createFor(workspace, connectionId) };
+    return {
+      workspace,
+      connection: create
+        ? await this.createFor(workspace, connectionId)
+        : this.unsavedFor(workspace, connectionId),
+    };
   }
 
   /** Names the workspace's primary connection when it has none yet. */
@@ -243,23 +251,34 @@ export class ConnectionLicenseService {
     return workspace.primaryConnectionId === connectionId;
   }
 
+  private static freeLicenceOf(workspace: OrganizationLicense, connectionId: string) {
+    return {
+      organizationLicenseId: workspace.id,
+      organizationId: workspace.organizationId,
+      teamId: workspace.teamId,
+      connectionId,
+      planType: PlanType.FREE_BYOK,
+      subscriptionStatus: SubscriptionStatus.ACTIVE,
+      stripeSubscriptionId: null,
+      totalLicenses: 0,
+      assignedLicenses: 0,
+    };
+  }
+
+  private static unsavedFor(
+    workspace: OrganizationLicense,
+    connectionId: string,
+  ): ConnectionLicense {
+    return ConnectionLicenseRepository.create(this.freeLicenceOf(workspace, connectionId));
+  }
+
   private static async createFor(
     workspace: OrganizationLicense,
     connectionId: string,
   ): Promise<ConnectionLicense> {
     try {
       const created = await ConnectionLicenseRepository.save(
-        ConnectionLicenseRepository.create({
-          organizationLicenseId: workspace.id,
-          organizationId: workspace.organizationId,
-          teamId: workspace.teamId,
-          connectionId,
-          planType: PlanType.FREE_BYOK,
-          subscriptionStatus: SubscriptionStatus.ACTIVE,
-          stripeSubscriptionId: null,
-          totalLicenses: 0,
-          assignedLicenses: 0,
-        }),
+        ConnectionLicenseRepository.create(this.freeLicenceOf(workspace, connectionId)),
       );
       clearLicenseCaches();
       log("connection_license_created", {

@@ -140,7 +140,7 @@ describe("connection-aware billing routes", () => {
       bind,
     );
     await SubscriptionController.releaseConnection(
-      { body: { organizationId: "org-1", connectionId: "gh-a" } } as any,
+      { body: { organizationId: "org-1", teamId: "team-1" } } as any,
       release,
     );
 
@@ -177,5 +177,17 @@ describe("connection-aware billing routes", () => {
       primaryConnectionId: "gh-a",
       connections: [{ valid: true, connectionId: "gl-b" }],
     });
+  });
+
+  it("answers 404 when checkout names a workspace billing has never seen", async () => {
+    (StripeService.createCheckoutSession as jest.Mock).mockResolvedValueOnce(null);
+    const res = response();
+
+    await SubscriptionController.createCheckoutSession(
+      { body: { organizationId: "org-1", quantity: 2, teamId: "unknown" } } as any,
+      res,
+    );
+
+    expect(res.status).toHaveBeenCalledWith(404);
   });
 });

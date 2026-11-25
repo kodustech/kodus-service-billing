@@ -105,7 +105,9 @@ describe("ConnectionLicenseService.resolve", () => {
   it("gives a connection other than the primary its own free licence, with no Stripe call", async () => {
     workspace({ primaryConnectionId: "gh-a" });
 
-    const pool = await ConnectionLicenseService.resolve("org-1", "team-1", "gl-b");
+    const pool = await ConnectionLicenseService.resolve("org-1", "team-1", "gl-b", {
+      create: true,
+    });
 
     expect(pool?.connection).toMatchObject({
       organizationLicenseId: "lic-1",
@@ -119,11 +121,29 @@ describe("ConnectionLicenseService.resolve", () => {
   it("reuses the connection's licence on later calls", async () => {
     workspace({ primaryConnectionId: "gh-a" });
 
-    const first = await ConnectionLicenseService.resolve("org-1", "team-1", "gl-b");
-    const second = await ConnectionLicenseService.resolve("org-1", "team-1", "gl-b");
+    const first = await ConnectionLicenseService.resolve("org-1", "team-1", "gl-b", {
+      create: true,
+    });
+    const second = await ConnectionLicenseService.resolve("org-1", "team-1", "gl-b", {
+      create: true,
+    });
 
     expect(second?.connection?.id).toBe(first?.connection?.id);
     expect(connections).toHaveLength(1);
+  });
+
+  it("describes a connection with no licence yet as free on a read, writing nothing", async () => {
+    workspace({ primaryConnectionId: "gh-a" });
+
+    const pool = await ConnectionLicenseService.resolve("org-1", "team-1", "gl-b");
+
+    expect(pool?.connection).toMatchObject({
+      connectionId: "gl-b",
+      planType: PlanType.FREE_BYOK,
+      totalLicenses: 0,
+    });
+    expect(pool?.connection?.id).toBeUndefined();
+    expect(connections).toHaveLength(0);
   });
 
   it("answers null for a workspace billing has never seen", async () => {

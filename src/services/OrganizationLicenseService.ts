@@ -220,6 +220,15 @@ const seatScope = (pool: SeatPool) =>
               connectionLicenseId: IsNull(),
           };
 
+/**
+ * Whether a pool's seats count: a connection's only while its licence exists
+ * and is valid. The workspace row's own status is checked by its callers.
+ */
+const holdsSeats = (pool: SeatPool) =>
+    !pool.connection ||
+    (Boolean(pool.connection.id) &&
+        ConnectionLicenseService.describe(pool.workspace, pool.connection).valid);
+
 const buildTrialCreditPayload = (license: OrganizationLicense) => ({
     byok: isByokPlan(license.planType),
     trialReviewCreditsTotal: license.trialReviewCreditsTotal,
@@ -289,6 +298,7 @@ export class OrganizationLicenseService {
             organizationId,
             teamId,
             connectionId,
+            { create: true },
         );
         const orgLicense = pool?.connection ?? pool?.workspace;
 
@@ -602,11 +612,12 @@ export class OrganizationLicenseService {
                 teamId,
                 connectionId,
             );
-            const seat = pool
-                ? await UserLicenseRepository.findOne({
-                      where: { git_id: userId, ...seatScope(pool) },
-                  })
-                : null;
+            if (!pool || !holdsSeats(pool)) {
+                return { git_id: userId, isValid: false };
+            }
+            const seat = await UserLicenseRepository.findOne({
+                where: { git_id: userId, ...seatScope(pool) },
+            });
             return { git_id: userId, isValid: !!seat };
         }
 
@@ -614,6 +625,7 @@ export class OrganizationLicenseService {
             where: {
                 git_id: userId,
                 organizationLicense: { organizationId, teamId },
+                connectionLicenseId: IsNull(),
             },
         });
 
@@ -659,6 +671,14 @@ export class OrganizationLicenseService {
             }
         }
 
+        return this.validateWorkspace(organizationId, teamId);
+    }
+
+    /** The plan on a workspace's own row (its primary connection's). */
+    private static async validateWorkspace(
+        organizationId: string,
+        teamId: string,
+    ): ReturnType<typeof OrganizationLicenseService.validateLicense> {
         const license = await OrganizationLicenseRepository.findOne({
             where: { organizationId, teamId },
         });
@@ -750,14 +770,14 @@ export class OrganizationLicenseService {
             where: { organizationId },
         });
         if (workspaces.length === 1 && !connections.length) {
-            return this.validateLicense(organizationId, workspaces[0].teamId);
+            return this.validateWorkspace(organizationId, workspaces[0].teamId);
         }
 
         const byId = new Map(workspaces.map((w) => [w.id, w]));
         const candidates = [
             ...(await Promise.all(
                 workspaces.map((w) =>
-                    this.validateLicense(organizationId, w.teamId),
+                    this.validateWorkspace(organizationId, w.teamId),
                 ),
             )),
             ...connections
@@ -1058,12 +1078,7 @@ export class OrganizationLicenseService {
         if (connectionId && !pool) return [];
 
         if (pool?.connection) {
-            if (
-                !ConnectionLicenseService.describe(pool.workspace, pool.connection)
-                    .valid
-            ) {
-                return [];
-            }
+            if (!holdsSeats(pool)) return [];
             const seats = await UserLicenseRepository.find({
                 where: {
                     licenseStatus: LicenseStatus.ACTIVE,

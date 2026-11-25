@@ -91,16 +91,15 @@ export class StripeService {
     teamId: string,
     planType: PlanType = PlanType.TEAMS_MANAGED_LEGACY,
     connectionId?: string
-  ): Promise<string> {
+  ): Promise<string | null> {
     const pool = await ConnectionLicenseService.resolve(
       organizationId,
       teamId,
-      connectionId
+      connectionId,
+      { create: true }
     );
 
-    if (!pool) {
-      throw new Error("Organização não encontrada");
-    }
+    if (!pool) return null;
     const license = pool.workspace;
 
     const session = await stripe.checkout.sessions.create({

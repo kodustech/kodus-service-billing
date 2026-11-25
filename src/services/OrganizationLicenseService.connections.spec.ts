@@ -150,7 +150,7 @@ describe("seats per Git connection", () => {
     expect(result.failed).toHaveLength(1);
   });
 
-  it("refuses seats on a connection with no subscription", async () => {
+  it("refuses seats on a free connection, which has none", async () => {
     resolve.mockResolvedValue({
       workspace: { ...workspace },
       connection: {
@@ -169,6 +169,39 @@ describe("seats per Git connection", () => {
     );
 
     expect(result.successful).toEqual([]);
+  });
+
+  it("refuses seats on a connection whose subscription was cancelled, whatever seats it had", async () => {
+    resolve.mockResolvedValue({
+      workspace: { ...workspace },
+      connection: {
+        ...gitlabConnection(),
+        subscriptionStatus: SubscriptionStatus.CANCELED,
+        totalLicenses: 5,
+      },
+    });
+
+    const result = await OrganizationLicenseService.assignLicensesToUsers(
+      "org-1",
+      "team-1",
+      [{ gitId: "42", gitTool: GitTool.GITLAB, licenseStatus: LicenseStatus.ACTIVE }],
+      "gl-b",
+    ).catch((error: Error) => ({ successful: [], failed: [], error }));
+
+    expect(result.successful).toEqual([]);
+  });
+
+  it("creates the connection's licence when assigning its first seat", async () => {
+    resolve.mockResolvedValue({ workspace: { ...workspace }, connection: gitlabConnection() });
+
+    await OrganizationLicenseService.assignLicensesToUsers(
+      "org-1",
+      "team-1",
+      [{ gitId: "42", gitTool: GitTool.GITLAB, licenseStatus: LicenseStatus.ACTIVE }],
+      "gl-b",
+    );
+
+    expect(resolve).toHaveBeenCalledWith("org-1", "team-1", "gl-b", { create: true });
   });
 
   it("does not count another connection's seats against the primary's pool", async () => {
@@ -205,6 +238,47 @@ describe("seats per Git connection", () => {
 
     await expect(
       OrganizationLicenseService.checkUserLicense("org-1", "42", "team-1", "gl-b"),
+    ).resolves.toEqual({ git_id: "42", isValid: false });
+  });
+
+  it("refuses a seat on a connection whose subscription was cancelled", async () => {
+    resolve.mockResolvedValue({
+      workspace,
+      connection: { ...gitlabConnection(), subscriptionStatus: SubscriptionStatus.CANCELED },
+    });
+    seats.push({ git_id: "42", licenseStatus: LicenseStatus.ACTIVE, connectionLicenseId: "cl-b" });
+
+    await expect(
+      OrganizationLicenseService.checkUserLicense("org-1", "42", "team-1", "gl-b"),
+    ).resolves.toEqual({ git_id: "42", isValid: false });
+  });
+
+  it("finds no seat on a connection whose licence does not exist yet", async () => {
+    const { id: _id, ...unsaved } = gitlabConnection();
+    resolve.mockResolvedValue({
+      workspace,
+      connection: { ...unsaved, planType: PlanType.FREE_BYOK, stripeSubscriptionId: null },
+    });
+    seats.push({ git_id: "42", licenseStatus: LicenseStatus.ACTIVE, connectionLicenseId: "cl-x" });
+
+    await expect(
+      OrganizationLicenseService.checkUserLicense("org-1", "42", "team-1", "gl-b"),
+    ).resolves.toEqual({ git_id: "42", isValid: false });
+    await expect(
+      OrganizationLicenseService.getAllUsersWithLicense("org-1", "team-1", "gl-b"),
+    ).resolves.toEqual([]);
+  });
+
+  it("checks a git id with no connection against the workspace's own seats only", async () => {
+    seats.push({
+      git_id: "42",
+      licenseStatus: LicenseStatus.ACTIVE,
+      organizationLicenseId: "lic-1",
+      connectionLicenseId: "cl-b",
+    });
+
+    await expect(
+      OrganizationLicenseService.checkUserLicense("org-1", "42", "team-1"),
     ).resolves.toEqual({ git_id: "42", isValid: false });
   });
 
@@ -302,6 +376,19 @@ describe("validateLicense for the whole organization", () => {
     await expect(
       OrganizationLicenseService.validateLicense("org-1", undefined as any),
     ).resolves.toMatchObject({ planType: PlanType.TEAMS_MANAGED });
+  });
+
+  it("answers for a single workspace row with no team without looping", async () => {
+    findWorkspaces.mockResolvedValue([{ ...workspace, teamId: "" }]);
+    findConnections.mockResolvedValue([]);
+    (OrganizationLicenseRepository.findOne as jest.Mock).mockResolvedValue({
+      ...workspace,
+      teamId: "",
+    });
+
+    await expect(
+      OrganizationLicenseService.validateLicense("org-1", undefined as any),
+    ).resolves.toMatchObject({ planType: PlanType.TEAMS_MANAGED, valid: true });
   });
 
   it("keeps a single-workspace organization on its own row", async () => {
