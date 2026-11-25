@@ -215,6 +215,8 @@ describe("OrganizationLicenseService.createTrialLicense", () => {
             [undefined, 14],
             ["abc", 14],
             ["0", 14],
+            ["365", 365],
+            ["2592000", 14],
         ])("TRIAL_DURATION=%s stamps a trialEnd %i days out", async (env, days) => {
             if (env === undefined) delete process.env.TRIAL_DURATION;
             else process.env.TRIAL_DURATION = env;
