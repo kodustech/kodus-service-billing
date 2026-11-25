@@ -199,6 +199,35 @@ describe("OrganizationLicenseService.createTrialLicense", () => {
         expect(license.trialCreditTier).toBe(TrialCreditTier.BASE);
         expect(Array.isArray(license.trialUnlocks)).toBe(true);
     });
+
+    describe("trial length", () => {
+        const original = process.env.TRIAL_DURATION;
+        afterEach(() => {
+            if (original === undefined) delete process.env.TRIAL_DURATION;
+            else process.env.TRIAL_DURATION = original;
+        });
+
+        const daysUntil = (d: Date) =>
+            Math.round((d.getTime() - Date.now()) / 86_400_000);
+
+        it.each([
+            ["7", 7],
+            [undefined, 14],
+            ["abc", 14],
+            ["0", 14],
+        ])("TRIAL_DURATION=%s stamps a trialEnd %i days out", async (env, days) => {
+            if (env === undefined) delete process.env.TRIAL_DURATION;
+            else process.env.TRIAL_DURATION = env;
+            repo.findOne.mockResolvedValue(null);
+
+            const license = await OrganizationLicenseService.createTrialLicense(
+                "org",
+                "team",
+            );
+
+            expect(daysUntil(license.trialEnd)).toBe(days);
+        });
+    });
 });
 
 describe("OrganizationLicenseService.recalculateTrialUnlocks", () => {
