@@ -102,6 +102,13 @@ export class StripeService {
     if (!pool) return null;
     const license = pool.workspace;
 
+    // A primary bind leaves this licence alone while the checkout can still
+    // complete (ConnectionLicenseService.checkoutPending).
+    if (pool.connection) {
+      pool.connection.checkoutStartedAt = new Date();
+      await ConnectionLicenseRepository.save(pool.connection);
+    }
+
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
       line_items: [

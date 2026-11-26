@@ -9,6 +9,8 @@ const find = (rows: Array<Record<string, any>>, where: Record<string, any>) =>
     Object.entries(where).every(([key, value]) => row[key] === value),
   ) ?? null;
 
+/** The order calls reached the licence store and Stripe. */
+const mockCalls: string[] = [];
 const CHECKOUT_URL = "https://checkout.stripe.com/c/pay/cs_test_1";
 let mockCheckoutUrl: string | null = CHECKOUT_URL;
 
@@ -17,6 +19,7 @@ jest.mock("stripe", () =>
     checkout: {
       sessions: {
         create: jest.fn(async (args: Record<string, any>) => {
+          mockCalls.push("stripe.checkout");
           created.push(args);
           return { url: mockCheckoutUrl };
         }),
@@ -43,7 +46,10 @@ jest.mock("../repositories/OrganizationLicenseRepository", () => ({
 jest.mock("../repositories/ConnectionLicenseRepository", () => ({
   ConnectionLicenseRepository: {
     findOne: jest.fn(async ({ where }: any) => find(connections, where)),
-    save: jest.fn(async (x: unknown) => x),
+    save: jest.fn(async (x: unknown) => {
+      mockCalls.push("licence.save");
+      return x;
+    }),
   },
 }));
 jest.mock("./ConnectionLicenseService", () => ({
@@ -73,9 +79,12 @@ import { StripeService } from "./StripeService";
 import { ConnectionLicenseService } from "./ConnectionLicenseService";
 import { PlanType, SubscriptionStatus } from "../entities/OrganizationLicense";
 import { KodusNotificationClient } from "./KodusNotificationClient";
+import { ConnectionLicenseRepository } from "../repositories/ConnectionLicenseRepository";
 
 beforeEach(() => {
   created.length = 0;
+  mockCalls.length = 0;
+  (ConnectionLicenseRepository.save as jest.Mock).mockClear();
   workspaces.length = 0;
   connections.length = 0;
   workspaces.push(
@@ -146,6 +155,21 @@ describe("subscription checkout per Git connection", () => {
     expect(ConnectionLicenseService.resolve).toHaveBeenCalledWith("org-1", "team-1", "gl-b", {
       create: true,
     });
+  });
+
+  it("records when a connection's checkout started, before opening it, so a bind waits for it", async () => {
+    await StripeService.createCheckoutSession(
+      "org-1",
+      2,
+      "team-1",
+      PlanType.TEAMS_BYOK,
+      "gl-b",
+    );
+
+    const [saved] = (ConnectionLicenseRepository.save as jest.Mock).mock.calls[0];
+    expect(saved.id).toBe("cl-b");
+    expect(saved.checkoutStartedAt).toBeInstanceOf(Date);
+    expect(mockCalls).toEqual(["licence.save", "stripe.checkout"]);
   });
 
   it("opens checkout for a connection's own licence, on the workspace's Stripe customer", async () => {

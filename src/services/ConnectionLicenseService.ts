@@ -41,16 +41,15 @@ export type ConnectionLicenseDescription = {
 
 type UnbilledClaim =
   | { bound: true; movedSeats: number; droppedSeats: number }
-  | { bound: false; subscribed?: ConnectionLicense };
+  | { bound: false; subscribed?: ConnectionLicense; checkoutPending?: true };
+
+/** How long a Stripe checkout session can still complete. */
+const CHECKOUT_HOLD_MS = 24 * 60 * 60 * 1000;
 
 const isByok = (planType?: PlanType) =>
   Boolean(planType && planType.includes("byok"));
 
 const UNIQUE_VIOLATION = "23505";
-
-/** A seat's holder: the git id on its tool and server. */
-const seatIdentity = (seat: Pick<UserLicense, "git_id" | "git_tool" | "git_host">) =>
-  `${seat.git_tool}|${seat.git_host ?? ""}|${seat.git_id}`;
 
 const log = (message: string, data: Record<string, unknown>) =>
   console.log(JSON.stringify({ message, ...data }));
@@ -72,6 +71,20 @@ export class ConnectionLicenseService {
     connection: Pick<ConnectionLicense, "stripeSubscriptionId">,
   ): boolean {
     return Boolean(connection.stripeSubscriptionId);
+  }
+
+  /**
+   * A checkout started for the licence can still complete: dropping it now
+   * would leave that subscription with no licence to land on.
+   */
+  static checkoutPending(
+    connection: Pick<ConnectionLicense, "checkoutStartedAt">,
+    now = Date.now(),
+  ): boolean {
+    const started = connection.checkoutStartedAt
+      ? new Date(connection.checkoutStartedAt).getTime()
+      : NaN;
+    return Number.isFinite(started) && now - started < CHECKOUT_HOLD_MS;
   }
 
   /**
@@ -287,8 +300,8 @@ export class ConnectionLicenseService {
    * Binds a connection whose licence has no subscription of its own, in one
    * transaction. The licence is re-read under a lock, so a checkout that has
    * stored its subscription since keeps it and refuses the bind. Its seats
-   * move to the workspace pool, except a holder (git id, tool and server) the
-   * workspace already seats, who keeps that seat, active if either was. Seats
+   * move to the workspace pool, except a git id the workspace already seats,
+   * which keeps that seat, active if either was. Seats
    * become active only while the workspace has free ones; then the licence
    * is dropped.
    */
@@ -310,6 +323,9 @@ export class ConnectionLicenseService {
         if (locked && this.hasOwnSubscription(locked)) {
           return { bound: false, subscribed: locked };
         }
+        if (locked && this.checkoutPending(locked)) {
+          return { bound: false, checkoutPending: true };
+        }
 
         const claimed = await workspaces.update(
           { id: workspace.id, primaryConnectionId: IsNull() },
@@ -330,10 +346,10 @@ export class ConnectionLicenseService {
               },
             })
           : [];
-        // One person is one git id on one tool and server: the same id
-        // elsewhere is someone else, who keeps a seat of their own.
+        // A seat is its git id within the pool, as for every seat lookup in
+        // billing (the gate and assignments match by git id too).
         const onWorkspace = new Map(
-          workspaceSeats.map((seat) => [seatIdentity(seat), seat]),
+          workspaceSeats.map((seat) => [seat.git_id, seat]),
         );
         // Seats only become active while the workspace has some free, as
         // an assignment would; the others move in inactive.
@@ -355,7 +371,7 @@ export class ConnectionLicenseService {
         const moveActive: string[] = [];
         const moveInactive: string[] = [];
         for (const seat of held) {
-          const same = onWorkspace.get(seatIdentity(seat));
+          const same = onWorkspace.get(seat.git_id);
           const active = seat.licenseStatus === LicenseStatus.ACTIVE;
           if (same) {
             if (active && same.licenseStatus !== LicenseStatus.ACTIVE && free) {
@@ -425,6 +441,17 @@ export class ConnectionLicenseService {
     }
     if (outcome.subscribed) {
       this.logOwnSubscriptionRefusal(workspace, outcome.subscribed);
+      return false;
+    }
+    if (outcome.checkoutPending) {
+      log("connection_license_primary_refused", {
+        organizationId: workspace.organizationId,
+        teamId: workspace.teamId,
+        licenseId: workspace.id,
+        connectionId,
+        connectionLicenseId: unbilled.id,
+        reason: "checkout_pending",
+      });
       return false;
     }
     return this.readWinner(workspace, connectionId);

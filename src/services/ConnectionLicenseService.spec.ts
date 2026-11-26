@@ -391,7 +391,7 @@ describe("ConnectionLicenseService.bindPrimary / release", () => {
         stripeSubscriptionId: null,
       });
 
-    it("keeps the same git id on another provider as its own seat: it is another person", async () => {
+    it("merges a seat into the workspace's seat for the same git id, as every billing seat lookup matches by git id", async () => {
       const w = workspace({ totalLicenses: 10, assignedLicenses: 0 });
       unbilled();
       seats.push(
@@ -403,10 +403,7 @@ describe("ConnectionLicenseService.bindPrimary / release", () => {
 
       expect(
         seats.map((s) => [s.id, s.connectionLicenseId, s.licenseStatus]),
-      ).toEqual([
-        ["s-ws-7", null, LicenseStatus.INACTIVE],
-        ["s-b-7", null, LicenseStatus.ACTIVE],
-      ]);
+      ).toEqual([["s-ws-7", null, LicenseStatus.ACTIVE]]);
       expect(w.assignedLicenses).toBe(1);
     });
 
@@ -432,6 +429,31 @@ describe("ConnectionLicenseService.bindPrimary / release", () => {
       ]);
       expect(w.assignedLicenses).toBe(1);
     });
+  });
+
+  it("binds nothing through a licence whose checkout may still complete, and binds once it cannot", async () => {
+    const hour = 60 * 60 * 1000;
+    const w = workspace();
+    const row = {
+      id: "cl-b",
+      organizationLicenseId: "lic-1",
+      connectionId: "gl-b",
+      stripeSubscriptionId: null as string | null,
+      checkoutStartedAt: new Date(Date.now() - hour) as Date | null,
+    };
+    connections.push(row);
+
+    await ConnectionLicenseService.bindPrimary("org-1", "team-1", "gl-b");
+
+    // A Stripe checkout session can complete for 24 hours.
+    expect(w.primaryConnectionId ?? null).toBeNull();
+    expect(connections).toEqual([row]);
+
+    row.checkoutStartedAt = new Date(Date.now() - 25 * hour);
+    await ConnectionLicenseService.bindPrimary("org-1", "team-1", "gl-b");
+
+    expect(w.primaryConnectionId).toBe("gl-b");
+    expect(connections).toEqual([]);
   });
 
   it("keeps the licence and binds nothing when its checkout completes before the bind takes it", async () => {

@@ -19,6 +19,7 @@ export class AddConnectionLicenses1795600000000 implements MigrationInterface {
       "subscriptionStatus" "billing"."organization_licenses_subscriptionstatus_enum" NOT NULL DEFAULT 'active',
       "planType" "billing"."organization_licenses_plantype_enum" NOT NULL DEFAULT 'free_byok',
       "stripeSubscriptionId" varchar,
+      "checkoutStartedAt" TIMESTAMP,
       "totalLicenses" integer NOT NULL DEFAULT 0,
       "assignedLicenses" integer NOT NULL DEFAULT 0,
       "createdAt" TIMESTAMP NOT NULL DEFAULT now(),

@@ -66,6 +66,13 @@ export class ConnectionLicense {
   @Column({ type: "varchar", nullable: true })
   stripeSubscriptionId: string | null;
 
+  /**
+   * When a checkout for this licence last started: until it can no longer
+   * complete, the licence is not dropped by a primary bind.
+   */
+  @Column({ type: "timestamp", nullable: true })
+  checkoutStartedAt: Date | null;
+
   @Column({ default: 0 })
   totalLicenses: number;
 

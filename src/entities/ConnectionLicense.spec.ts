@@ -45,6 +45,11 @@ describe("connection licences share the workspace licence's enum types", () => {
     expect(table).toContain(
       `"planType" "billing"."${PLAN_TYPE_ENUM}" NOT NULL DEFAULT 'free_byok'`,
     );
+    expect(table).toContain(`"checkoutStartedAt" TIMESTAMP`);
+    expect(columnOptions("checkoutStartedAt")).toMatchObject({
+      type: "timestamp",
+      nullable: true,
+    });
   });
 
   it("drops the table on down and leaves the shared enum types to organization_licenses", async () => {
