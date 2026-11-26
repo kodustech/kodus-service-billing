@@ -73,6 +73,9 @@ const seatRepo = {
     hit.forEach((s) => Object.assign(s, values));
     return { affected: hit.length };
   }),
+  count: jest.fn(async ({ where }: any) =>
+    seats.filter((s) => matches(s, where)).length,
+  ),
 };
 
 jest.mock("../config/database", () => ({
@@ -362,6 +365,73 @@ describe("ConnectionLicenseService.bindPrimary / release", () => {
       seats.map((s) => [s.id, s.connectionLicenseId, s.licenseStatus]),
     ).toEqual([["s-ws-2", null, LicenseStatus.ACTIVE]]);
     expect(w.assignedLicenses).toBe(1);
+  });
+
+  describe("seats of an unbilled licence when its connection becomes the primary", () => {
+    const seat = (
+      id: string,
+      gitId: string,
+      connectionLicenseId: string | null,
+      licenseStatus: LicenseStatus,
+      gitTool = "github",
+    ) => ({
+      id,
+      git_id: gitId,
+      git_tool: gitTool,
+      git_host: null,
+      organizationLicenseId: "lic-1",
+      connectionLicenseId,
+      licenseStatus,
+    });
+    const unbilled = () =>
+      connections.push({
+        id: "cl-b",
+        organizationLicenseId: "lic-1",
+        connectionId: "gl-b",
+        stripeSubscriptionId: null,
+      });
+
+    it("keeps the same git id on another provider as its own seat: it is another person", async () => {
+      const w = workspace({ totalLicenses: 10, assignedLicenses: 0 });
+      unbilled();
+      seats.push(
+        seat("s-ws-7", "7", null, LicenseStatus.INACTIVE, "github"),
+        seat("s-b-7", "7", "cl-b", LicenseStatus.ACTIVE, "gitlab"),
+      );
+
+      await ConnectionLicenseService.bindPrimary("org-1", "team-1", "gl-b");
+
+      expect(
+        seats.map((s) => [s.id, s.connectionLicenseId, s.licenseStatus]),
+      ).toEqual([
+        ["s-ws-7", null, LicenseStatus.INACTIVE],
+        ["s-b-7", null, LicenseStatus.ACTIVE],
+      ]);
+      expect(w.assignedLicenses).toBe(1);
+    });
+
+    it("activates no more seats than the workspace has free: the rest move in inactive", async () => {
+      // One seat bought, already taken.
+      const w = workspace({ totalLicenses: 1, assignedLicenses: 1 });
+      unbilled();
+      seats.push(
+        seat("s-ws-1", "1", null, LicenseStatus.ACTIVE),
+        seat("s-ws-2", "2", null, LicenseStatus.INACTIVE),
+        seat("s-b-2", "2", "cl-b", LicenseStatus.ACTIVE),
+        seat("s-b-3", "3", "cl-b", LicenseStatus.ACTIVE),
+      );
+
+      await ConnectionLicenseService.bindPrimary("org-1", "team-1", "gl-b");
+
+      expect(
+        seats.map((s) => [s.id, s.connectionLicenseId, s.licenseStatus]),
+      ).toEqual([
+        ["s-ws-1", null, LicenseStatus.ACTIVE],
+        ["s-ws-2", null, LicenseStatus.INACTIVE],
+        ["s-b-3", null, LicenseStatus.INACTIVE],
+      ]);
+      expect(w.assignedLicenses).toBe(1);
+    });
   });
 
   it("keeps the licence and binds nothing when its checkout completes before the bind takes it", async () => {

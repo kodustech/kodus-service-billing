@@ -48,6 +48,10 @@ const isByok = (planType?: PlanType) =>
 
 const UNIQUE_VIOLATION = "23505";
 
+/** A seat's holder: the git id on its tool and server. */
+const seatIdentity = (seat: Pick<UserLicense, "git_id" | "git_tool" | "git_host">) =>
+  `${seat.git_tool}|${seat.git_host ?? ""}|${seat.git_id}`;
+
 const log = (message: string, data: Record<string, unknown>) =>
   console.log(JSON.stringify({ message, ...data }));
 
@@ -283,8 +287,10 @@ export class ConnectionLicenseService {
    * Binds a connection whose licence has no subscription of its own, in one
    * transaction. The licence is re-read under a lock, so a checkout that has
    * stored its subscription since keeps it and refuses the bind. Its seats
-   * move to the workspace pool, except a git id the workspace already seats,
-   * which keeps that seat; then the licence is dropped.
+   * move to the workspace pool, except a holder (git id, tool and server) the
+   * workspace already seats, who keeps that seat, active if either was. Seats
+   * become active only while the workspace has free ones; then the licence
+   * is dropped.
    */
   private static async claimPrimaryFromUnbilled(
     workspace: OrganizationLicense,
@@ -324,55 +330,81 @@ export class ConnectionLicenseService {
               },
             })
           : [];
-        // A git id the workspace already seats keeps that seat, active when
-        // either of the two was: the user loses no access on the bind.
-        const activeHeld = new Set(
-          held
-            .filter((seat) => seat.licenseStatus === LicenseStatus.ACTIVE)
-            .map((seat) => seat.git_id),
+        // One person is one git id on one tool and server: the same id
+        // elsewhere is someone else, who keeps a seat of their own.
+        const onWorkspace = new Map(
+          workspaceSeats.map((seat) => [seatIdentity(seat), seat]),
         );
-        const reactivated = workspaceSeats.filter(
-          (seat) =>
-            seat.licenseStatus !== LicenseStatus.ACTIVE &&
-            activeHeld.has(seat.git_id),
+        // Seats only become active while the workspace has some free, as
+        // an assignment would; the others move in inactive.
+        const current = await workspaces.findOne({ where: { id: workspace.id } });
+        const activeOnWorkspace = await seats.count({
+          where: {
+            organizationLicenseId: workspace.id,
+            connectionLicenseId: IsNull(),
+            licenseStatus: LicenseStatus.ACTIVE,
+          },
+        });
+        let free = Math.max(
+          0,
+          (current?.totalLicenses ?? workspace.totalLicenses ?? 0) -
+            activeOnWorkspace,
         );
-        if (reactivated.length) {
+
+        const reactivate: string[] = [];
+        const moveActive: string[] = [];
+        const moveInactive: string[] = [];
+        for (const seat of held) {
+          const same = onWorkspace.get(seatIdentity(seat));
+          const active = seat.licenseStatus === LicenseStatus.ACTIVE;
+          if (same) {
+            if (active && same.licenseStatus !== LicenseStatus.ACTIVE && free) {
+              reactivate.push(same.id);
+              free--;
+            }
+            continue;
+          }
+          if (active && free) {
+            moveActive.push(seat.id);
+            free--;
+          } else {
+            moveInactive.push(seat.id);
+          }
+        }
+
+        if (reactivate.length) {
           await seats.update(
-            { id: In(reactivated.map((seat) => seat.id)) },
+            { id: In(reactivate) },
             { licenseStatus: LicenseStatus.ACTIVE },
           );
-          await workspaces.increment(
-            { id: workspace.id },
-            "assignedLicenses",
-            reactivated.length,
-          );
         }
-        const seatedOnWorkspace = new Set(
-          workspaceSeats.map((seat) => seat.git_id),
-        );
-        const moving = held.filter((seat) => !seatedOnWorkspace.has(seat.git_id));
-        if (moving.length) {
+        if (moveActive.length) {
           await seats.update(
-            { id: In(moving.map((seat) => seat.id)) },
+            { id: In(moveActive) },
             { connectionLicenseId: null },
           );
         }
-        const activeMoved = moving.filter(
-          (seat) => seat.licenseStatus === LicenseStatus.ACTIVE,
-        ).length;
-        if (activeMoved) {
+        if (moveInactive.length) {
+          await seats.update(
+            { id: In(moveInactive) },
+            { connectionLicenseId: null, licenseStatus: LicenseStatus.INACTIVE },
+          );
+        }
+        const activated = reactivate.length + moveActive.length;
+        if (activated) {
           await workspaces.increment(
             { id: workspace.id },
             "assignedLicenses",
-            activeMoved,
+            activated,
           );
         }
+        const moved = moveActive.length + moveInactive.length;
         // Seats still on it duplicate the workspace's and cascade with it.
         await licences.delete({ id: locked.id });
         return {
           bound: true,
-          movedSeats: moving.length,
-          droppedSeats: held.length - moving.length,
+          movedSeats: moved,
+          droppedSeats: held.length - moved,
         };
       },
     );
