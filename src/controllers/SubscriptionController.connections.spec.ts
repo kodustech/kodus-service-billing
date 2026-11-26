@@ -190,6 +190,43 @@ describe("connection-aware billing routes", () => {
     });
   });
 
+  it("lists a connection without its own subscription on the workspace plan while no primary is bound, as seat checks read it", async () => {
+    (ConnectionLicenseService.resolve as jest.Mock).mockResolvedValue({
+      workspace: { id: "lic-1", primaryConnectionId: null },
+      connection: null,
+    });
+    (OrganizationLicenseService.validateLicense as jest.Mock).mockResolvedValueOnce({
+      valid: true,
+      planType: "teams_byok",
+      numberOfLicenses: 10,
+    });
+    const res = response();
+
+    await SubscriptionController.listConnectionLicenses(
+      { query: { organizationId: "org-1", teamId: "team-1" } } as any,
+      res,
+    );
+
+    expect(OrganizationLicenseService.validateLicense).toHaveBeenCalledWith(
+      "org-1",
+      "team-1",
+      "gl-b",
+    );
+    expect(res.json).toHaveBeenCalledWith({
+      primaryConnectionId: null,
+      connections: [
+        {
+          valid: true,
+          planType: "teams_byok",
+          numberOfLicenses: 10,
+          connectionId: "gl-b",
+          ownSubscription: false,
+        },
+        { valid: true, connectionId: "gl-c", ownSubscription: true },
+      ],
+    });
+  });
+
   it("answers 404 when checkout names a workspace billing has never seen", async () => {
     (StripeService.createCheckoutSession as jest.Mock).mockResolvedValueOnce(null);
     const res = response();

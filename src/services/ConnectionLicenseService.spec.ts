@@ -331,6 +331,39 @@ describe("ConnectionLicenseService.bindPrimary / release", () => {
     expect(w.assignedLicenses).toBe(2);
   });
 
+  it("keeps a seat active when the connection's seat is active and the workspace's duplicate is not", async () => {
+    const w = workspace({ assignedLicenses: 0 });
+    connections.push({
+      id: "cl-b",
+      organizationLicenseId: "lic-1",
+      connectionId: "gl-b",
+      stripeSubscriptionId: null,
+    });
+    seats.push(
+      {
+        id: "s-ws-2",
+        git_id: "2",
+        organizationLicenseId: "lic-1",
+        connectionLicenseId: null,
+        licenseStatus: LicenseStatus.INACTIVE,
+      },
+      {
+        id: "s-b-2",
+        git_id: "2",
+        organizationLicenseId: "lic-1",
+        connectionLicenseId: "cl-b",
+        licenseStatus: LicenseStatus.ACTIVE,
+      },
+    );
+
+    await ConnectionLicenseService.bindPrimary("org-1", "team-1", "gl-b");
+
+    expect(
+      seats.map((s) => [s.id, s.connectionLicenseId, s.licenseStatus]),
+    ).toEqual([["s-ws-2", null, LicenseStatus.ACTIVE]]);
+    expect(w.assignedLicenses).toBe(1);
+  });
+
   it("keeps the licence and binds nothing when its checkout completes before the bind takes it", async () => {
     const w = workspace();
     const row = {

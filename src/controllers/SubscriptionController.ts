@@ -436,13 +436,33 @@ export class SubscriptionController {
             const connections = await ConnectionLicenseService.listForWorkspace(
                 pool.workspace,
             );
+            const primaryConnectionId = pool.workspace.primaryConnectionId ?? null;
             return res.json({
-                primaryConnectionId: pool.workspace.primaryConnectionId ?? null,
-                connections: connections.map((connection) => ({
-                    ...ConnectionLicenseService.describe(pool.workspace, connection),
-                    ownSubscription:
-                        ConnectionLicenseService.hasOwnSubscription(connection),
-                })),
+                primaryConnectionId,
+                connections: await Promise.all(
+                    connections.map(async (connection) => {
+                        const ownSubscription =
+                            ConnectionLicenseService.hasOwnSubscription(connection);
+                        // While no primary is bound, a connection without a
+                        // subscription of its own bills on the workspace:
+                        // described as seat checks read it.
+                        const plan =
+                            !ownSubscription && !primaryConnectionId
+                                ? {
+                                      ...(await OrganizationLicenseService.validateLicense(
+                                          organizationId as string,
+                                          teamId as string,
+                                          connection.connectionId,
+                                      )),
+                                      connectionId: connection.connectionId,
+                                  }
+                                : ConnectionLicenseService.describe(
+                                      pool.workspace,
+                                      connection,
+                                  );
+                        return { ...plan, ownSubscription };
+                    }),
+                ),
             });
         } catch (error) {
             console.error("Error listing connection licences:", errorSummary(error));

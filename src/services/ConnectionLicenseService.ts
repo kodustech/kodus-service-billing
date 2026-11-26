@@ -315,18 +315,40 @@ export class ConnectionLicenseService {
         const held = await seats.find({
           where: { connectionLicenseId: locked.id },
         });
+        const workspaceSeats = held.length
+          ? await seats.find({
+              where: {
+                organizationLicenseId: workspace.id,
+                connectionLicenseId: IsNull(),
+                git_id: In(held.map((seat) => seat.git_id)),
+              },
+            })
+          : [];
+        // A git id the workspace already seats keeps that seat, active when
+        // either of the two was: the user loses no access on the bind.
+        const activeHeld = new Set(
+          held
+            .filter((seat) => seat.licenseStatus === LicenseStatus.ACTIVE)
+            .map((seat) => seat.git_id),
+        );
+        const reactivated = workspaceSeats.filter(
+          (seat) =>
+            seat.licenseStatus !== LicenseStatus.ACTIVE &&
+            activeHeld.has(seat.git_id),
+        );
+        if (reactivated.length) {
+          await seats.update(
+            { id: In(reactivated.map((seat) => seat.id)) },
+            { licenseStatus: LicenseStatus.ACTIVE },
+          );
+          await workspaces.increment(
+            { id: workspace.id },
+            "assignedLicenses",
+            reactivated.length,
+          );
+        }
         const seatedOnWorkspace = new Set(
-          held.length
-            ? (
-                await seats.find({
-                  where: {
-                    organizationLicenseId: workspace.id,
-                    connectionLicenseId: IsNull(),
-                    git_id: In(held.map((seat) => seat.git_id)),
-                  },
-                })
-              ).map((seat) => seat.git_id)
-            : [],
+          workspaceSeats.map((seat) => seat.git_id),
         );
         const moving = held.filter((seat) => !seatedOnWorkspace.has(seat.git_id));
         if (moving.length) {
