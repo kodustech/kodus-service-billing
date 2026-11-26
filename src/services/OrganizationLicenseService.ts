@@ -23,31 +23,46 @@ import axios from "axios";
 import { AppDataSource } from "../config/database";
 import { KodusNotificationClient } from "./KodusNotificationClient";
 
-const rawTrialReviewCredits = parseInt(
-    process.env.TRIAL_REVIEW_CREDITS_INCLUDED || "5",
-    10,
-);
-// Guard against a non-numeric env value: NaN would propagate into
-// trialReviewCreditsTotal (credits never exhaust) and Postgres rejects NaN on
-// the integer column at save time.
-const TRIAL_REVIEW_CREDITS_INCLUDED = Number.isNaN(rawTrialReviewCredits)
-    ? 5
-    : Math.max(0, rawTrialReviewCredits);
+export type TrialTerms = {
+    trialDays: number;
+    trialReviewCreditsIncluded: number;
+};
 
-// TRIAL_DURATION is the key the deploy scripts fetch from SSM
-// (scripts/fetch-env.*.sh). A value outside 1..365 days (missing, non-numeric,
-// or in the wrong unit, e.g. seconds) falls back to 14 so a bad env never
-// stamps a past, invalid or effectively permanent trial.
 const DEFAULT_TRIAL_DAYS = 14;
 const MAX_TRIAL_DAYS = 365;
-const getTrialDays = (): number => {
-    const raw = parseInt(
+const DEFAULT_TRIAL_REVIEW_CREDITS = 5;
+
+/**
+ * What a trial started now gets, read from env on every call so the license
+ * createTrialLicense stamps and the terms /trial-terms reports cannot diverge.
+ *
+ * TRIAL_DURATION is the key the deploy scripts fetch from SSM
+ * (scripts/fetch-env.*.sh). A value outside 1..365 days (missing, non-numeric,
+ * or in the wrong unit, e.g. seconds) falls back to 14 so a bad env never
+ * stamps a past, invalid or effectively permanent trial.
+ * TRIAL_REVIEW_CREDITS_INCLUDED falls back to 5 when non-numeric: NaN would
+ * reach trialReviewCreditsTotal (credits never exhaust) and Postgres rejects
+ * NaN on the integer column. Negative values clamp to 0.
+ */
+export const trialTermsFromEnv = (): TrialTerms => {
+    const rawDays = parseInt(
         process.env.TRIAL_DURATION || String(DEFAULT_TRIAL_DAYS),
         10,
     );
-    return Number.isNaN(raw) || raw < 1 || raw > MAX_TRIAL_DAYS
-        ? DEFAULT_TRIAL_DAYS
-        : raw;
+    const rawCredits = parseInt(
+        process.env.TRIAL_REVIEW_CREDITS_INCLUDED ||
+            String(DEFAULT_TRIAL_REVIEW_CREDITS),
+        10,
+    );
+    return {
+        trialDays:
+            Number.isNaN(rawDays) || rawDays < 1 || rawDays > MAX_TRIAL_DAYS
+                ? DEFAULT_TRIAL_DAYS
+                : rawDays,
+        trialReviewCreditsIncluded: Number.isNaN(rawCredits)
+            ? DEFAULT_TRIAL_REVIEW_CREDITS
+            : Math.max(0, rawCredits),
+    };
 };
 
 const isByokPlan = (planType?: PlanType): boolean =>
@@ -218,14 +233,8 @@ export class OrganizationLicenseService {
      * For screens shown before the trial exists; a running trial reads its
      * own trialStart/trialEnd and credit fields instead.
      */
-    static getTrialTerms(): {
-        trialDays: number;
-        trialReviewCreditsIncluded: number;
-    } {
-        return {
-            trialDays: getTrialDays(),
-            trialReviewCreditsIncluded: TRIAL_REVIEW_CREDITS_INCLUDED,
-        };
+    static getTrialTerms(): TrialTerms {
+        return trialTermsFromEnv();
     }
 
     static async createTrialLicense(
@@ -244,8 +253,9 @@ export class OrganizationLicenseService {
             );
         }
 
+        const terms = trialTermsFromEnv();
         const trialEnd = new Date();
-        trialEnd.setDate(trialEnd.getDate() + getTrialDays());
+        trialEnd.setDate(trialEnd.getDate() + terms.trialDays);
 
         const license = OrganizationLicenseRepository.create({
             organizationId,
@@ -253,9 +263,9 @@ export class OrganizationLicenseService {
             subscriptionStatus: SubscriptionStatus.TRIAL,
             planType,
             trialEnd,
-            trialReviewCreditsTotal: TRIAL_REVIEW_CREDITS_INCLUDED,
+            trialReviewCreditsTotal: terms.trialReviewCreditsIncluded,
             trialReviewCreditsUsed: 0,
-            trialReviewCreditsRemaining: TRIAL_REVIEW_CREDITS_INCLUDED,
+            trialReviewCreditsRemaining: terms.trialReviewCreditsIncluded,
             trialCreditTier: TrialCreditTier.BASE,
             trialUnlocks: defaultTrialUnlocks(planType),
             trialReviewCreditUsageKeys: [],

@@ -19,6 +19,7 @@ describe("GET /api/billing/trial-terms", () => {
   let base: string;
   const original = process.env.TRIAL_DURATION;
   const originalStripeKey = process.env.STRIPE_SECRET_KEY;
+  const originalCredits = process.env.TRIAL_REVIEW_CREDITS_INCLUDED;
 
   beforeAll(async () => {
     process.env.STRIPE_SECRET_KEY ||= "sk_test_placeholder";
@@ -37,17 +38,21 @@ describe("GET /api/billing/trial-terms", () => {
     else process.env.TRIAL_DURATION = original;
     if (originalStripeKey === undefined) delete process.env.STRIPE_SECRET_KEY;
     else process.env.STRIPE_SECRET_KEY = originalStripeKey;
+    if (originalCredits === undefined)
+      delete process.env.TRIAL_REVIEW_CREDITS_INCLUDED;
+    else process.env.TRIAL_REVIEW_CREDITS_INCLUDED = originalCredits;
   });
 
-  it("answers without a service token, with the configured trial length", async () => {
+  it("answers without a service token, with the trial terms configured right now", async () => {
     process.env.TRIAL_DURATION = "7";
+    process.env.TRIAL_REVIEW_CREDITS_INCLUDED = "3";
 
     const res = await fetch(`${base}/api/billing/trial-terms`);
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       trialDays: 7,
-      trialReviewCreditsIncluded: 5,
+      trialReviewCreditsIncluded: 3,
     });
   });
 });

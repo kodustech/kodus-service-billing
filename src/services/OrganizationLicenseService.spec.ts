@@ -250,6 +250,29 @@ describe("OrganizationLicenseService.getTrialTerms", () => {
         expect(OrganizationLicenseService.getTrialTerms().trialDays).toBe(21);
     });
 
+    it("reads the included reviews on every call too, and stamps the same number on a new trial", async () => {
+        const originalCredits = process.env.TRIAL_REVIEW_CREDITS_INCLUDED;
+        process.env.TRIAL_REVIEW_CREDITS_INCLUDED = "0";
+        try {
+            expect(
+                OrganizationLicenseService.getTrialTerms()
+                    .trialReviewCreditsIncluded,
+            ).toBe(0);
+
+            (OrganizationLicenseRepository.findOne as jest.Mock).mockResolvedValue(null);
+            const license = await OrganizationLicenseService.createTrialLicense(
+                "org",
+                "team",
+            );
+            expect(license.trialReviewCreditsTotal).toBe(0);
+            expect(license.trialReviewCreditsRemaining).toBe(0);
+        } finally {
+            if (originalCredits === undefined)
+                delete process.env.TRIAL_REVIEW_CREDITS_INCLUDED;
+            else process.env.TRIAL_REVIEW_CREDITS_INCLUDED = originalCredits;
+        }
+    });
+
     it("falls back to 14 days on the same values createTrialLicense rejects", () => {
         process.env.TRIAL_DURATION = "2592000";
         expect(OrganizationLicenseService.getTrialTerms().trialDays).toBe(14);
