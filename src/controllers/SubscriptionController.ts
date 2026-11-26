@@ -438,9 +438,11 @@ export class SubscriptionController {
             );
             return res.json({
                 primaryConnectionId: pool.workspace.primaryConnectionId ?? null,
-                connections: connections.map((connection) =>
-                    ConnectionLicenseService.describe(pool.workspace, connection),
-                ),
+                connections: connections.map((connection) => ({
+                    ...ConnectionLicenseService.describe(pool.workspace, connection),
+                    ownSubscription:
+                        ConnectionLicenseService.hasOwnSubscription(connection),
+                })),
             });
         } catch (error) {
             console.error("Error listing connection licences:", errorSummary(error));

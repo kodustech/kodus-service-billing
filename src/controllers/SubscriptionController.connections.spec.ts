@@ -16,8 +16,16 @@ jest.mock("../services/ConnectionLicenseService", () => ({
     bindPrimary: jest.fn(async () => ({ found: true, primaryConnectionId: "gh-a" })),
     release: jest.fn(async () => ({ released: true })),
     resolve: jest.fn(),
-    describe: jest.fn(() => ({ valid: true, connectionId: "gl-b" })),
-    listForWorkspace: jest.fn(async () => [{ connectionId: "gl-b" }]),
+    describe: jest.fn((_workspace: unknown, connection: { connectionId: string }) => ({
+      valid: true,
+      connectionId: connection.connectionId,
+    })),
+    hasOwnSubscription: jest.requireActual("../services/ConnectionLicenseService")
+      .ConnectionLicenseService.hasOwnSubscription,
+    listForWorkspace: jest.fn(async () => [
+      { connectionId: "gl-b", stripeSubscriptionId: null },
+      { connectionId: "gl-c", stripeSubscriptionId: "sub_c" },
+    ]),
   },
 }));
 jest.mock("../services/PlanCatalogService", () => ({ PlanCatalogService: {} }));
@@ -161,7 +169,7 @@ describe("connection-aware billing routes", () => {
     );
   });
 
-  it("lists the workspace's connection licences with their effective plan", async () => {
+  it("lists the workspace's connection licences with their effective plan and whether each has its own subscription", async () => {
     (ConnectionLicenseService.resolve as jest.Mock).mockResolvedValue({
       workspace: { id: "lic-1", primaryConnectionId: "gh-a" },
       connection: null,
@@ -175,7 +183,10 @@ describe("connection-aware billing routes", () => {
 
     expect(res.json).toHaveBeenCalledWith({
       primaryConnectionId: "gh-a",
-      connections: [{ valid: true, connectionId: "gl-b" }],
+      connections: [
+        { valid: true, connectionId: "gl-b", ownSubscription: false },
+        { valid: true, connectionId: "gl-c", ownSubscription: true },
+      ],
     });
   });
 

@@ -1,5 +1,6 @@
-import { IsNull } from "typeorm";
+import { In, IsNull } from "typeorm";
 
+import { AppDataSource } from "../config/database";
 import { ConnectionLicense } from "../entities/ConnectionLicense";
 import {
   OrganizationLicense,
@@ -7,6 +8,7 @@ import {
   SubscriptionStatus,
   TrialUnlock,
 } from "../entities/OrganizationLicense";
+import { LicenseStatus, UserLicense } from "../entities/UserLicense";
 import { clearCacheByPrefix } from "../config/utils/cache";
 import { ConnectionLicenseRepository } from "../repositories/ConnectionLicenseRepository";
 import { OrganizationLicenseRepository } from "../repositories/OrganizationLicenseRepository";
@@ -37,6 +39,10 @@ export type ConnectionLicenseDescription = {
   trialUnlocks?: TrialUnlock[];
 };
 
+type UnbilledClaim =
+  | { bound: true; movedSeats: number; droppedSeats: number }
+  | { bound: false; subscribed?: ConnectionLicense };
+
 const isByok = (planType?: PlanType) =>
   Boolean(planType && planType.includes("byok"));
 
@@ -53,14 +59,26 @@ const clearLicenseCaches = () => {
 
 export class ConnectionLicenseService {
   /**
+   * Whether a connection's licence carries a Stripe subscription of its own.
+   * One without it bills nothing: seat calls and checkouts write the row
+   * before they succeed, so it may be left by one that failed or was
+   * abandoned.
+   */
+  static hasOwnSubscription(
+    connection: Pick<ConnectionLicense, "stripeSubscriptionId">,
+  ): boolean {
+    return Boolean(connection.stripeSubscriptionId);
+  }
+
+  /**
    * The seat pool for `connectionId` in a workspace. A call with no
    * connection, or naming the primary, uses the workspace row. Until kodus-ai
    * binds a primary (server side, before a second connection is added),
-   * every connection without its own licence also uses the workspace row:
-   * that is today's behaviour, and a caller cannot claim the workspace plan
-   * by naming an id first. Once a primary is bound, any other connection
-   * gets its own licence on the free plan, with no Stripe call. Only
-   * `create` writes it (seats, checkout); a read gets an unsaved free
+   * every connection without a subscription of its own also uses the
+   * workspace row: that is today's behaviour, and a caller cannot claim the
+   * workspace plan by naming an id first. Once a primary is bound, any other
+   * connection gets its own licence on the free plan, with no Stripe call.
+   * Only `create` writes it (seats, checkout); a read gets an unsaved free
    * licence, so read calls never add rows.
    */
   static async resolve(
@@ -80,11 +98,16 @@ export class ConnectionLicenseService {
     const existing = await ConnectionLicenseRepository.findOne({
       where: { organizationLicenseId: workspace.id, connectionId },
     });
-    if (existing) return { workspace, connection: existing };
 
     if (workspace.primaryConnectionId == null) {
-      return { workspace, connection: null };
+      return {
+        workspace,
+        connection:
+          existing && this.hasOwnSubscription(existing) ? existing : null,
+      };
     }
+
+    if (existing) return { workspace, connection: existing };
 
     return {
       workspace,
@@ -94,7 +117,11 @@ export class ConnectionLicenseService {
     };
   }
 
-  /** Names the workspace's primary connection when it has none yet. */
+  /**
+   * Names the workspace's primary connection when it has none yet. A
+   * connection whose licence bills nothing can be named: its seats join the
+   * workspace pool and the licence is dropped.
+   */
   static async bindPrimary(
     organizationId: string,
     teamId: string,
@@ -109,9 +136,15 @@ export class ConnectionLicenseService {
       const existing = await ConnectionLicenseRepository.findOne({
         where: { organizationLicenseId: workspace.id, connectionId },
       });
-      // A connection already billed on its own licence never takes the
-      // workspace's plan by being named here.
-      if (!existing) await this.claimPrimary(workspace, connectionId);
+      if (!existing) {
+        await this.claimPrimary(workspace, connectionId);
+      } else if (this.hasOwnSubscription(existing)) {
+        // A connection billed on its own subscription never takes the
+        // workspace's plan by being named here.
+        this.logOwnSubscriptionRefusal(workspace, existing);
+      } else {
+        await this.claimPrimaryFromUnbilled(workspace, existing);
+      }
     }
 
     return {
@@ -243,12 +276,130 @@ export class ConnectionLicenseService {
       return true;
     }
 
-    // Another request bound it first: read who won.
+    return this.readWinner(workspace, connectionId);
+  }
+
+  /**
+   * Binds a connection whose licence has no subscription of its own, in one
+   * transaction. The licence is re-read under a lock, so a checkout that has
+   * stored its subscription since keeps it and refuses the bind. Its seats
+   * move to the workspace pool, except a git id the workspace already seats,
+   * which keeps that seat; then the licence is dropped.
+   */
+  private static async claimPrimaryFromUnbilled(
+    workspace: OrganizationLicense,
+    unbilled: ConnectionLicense,
+  ): Promise<boolean> {
+    const connectionId = unbilled.connectionId;
+    const outcome: UnbilledClaim = await AppDataSource.transaction(
+      async (manager) => {
+        const licences = manager.getRepository(ConnectionLicense);
+        const workspaces = manager.getRepository(OrganizationLicense);
+        const seats = manager.getRepository(UserLicense);
+
+        const locked = await licences.findOne({
+          where: { id: unbilled.id },
+          lock: { mode: "pessimistic_write" },
+        });
+        if (locked && this.hasOwnSubscription(locked)) {
+          return { bound: false, subscribed: locked };
+        }
+
+        const claimed = await workspaces.update(
+          { id: workspace.id, primaryConnectionId: IsNull() },
+          { primaryConnectionId: connectionId },
+        );
+        if ((claimed.affected ?? 0) === 0) return { bound: false };
+        if (!locked) return { bound: true, movedSeats: 0, droppedSeats: 0 };
+
+        const held = await seats.find({
+          where: { connectionLicenseId: locked.id },
+        });
+        const seatedOnWorkspace = new Set(
+          held.length
+            ? (
+                await seats.find({
+                  where: {
+                    organizationLicenseId: workspace.id,
+                    connectionLicenseId: IsNull(),
+                    git_id: In(held.map((seat) => seat.git_id)),
+                  },
+                })
+              ).map((seat) => seat.git_id)
+            : [],
+        );
+        const moving = held.filter((seat) => !seatedOnWorkspace.has(seat.git_id));
+        if (moving.length) {
+          await seats.update(
+            { id: In(moving.map((seat) => seat.id)) },
+            { connectionLicenseId: null },
+          );
+        }
+        const activeMoved = moving.filter(
+          (seat) => seat.licenseStatus === LicenseStatus.ACTIVE,
+        ).length;
+        if (activeMoved) {
+          await workspaces.increment(
+            { id: workspace.id },
+            "assignedLicenses",
+            activeMoved,
+          );
+        }
+        // Seats still on it duplicate the workspace's and cascade with it.
+        await licences.delete({ id: locked.id });
+        return {
+          bound: true,
+          movedSeats: moving.length,
+          droppedSeats: held.length - moving.length,
+        };
+      },
+    );
+
+    if (outcome.bound === true) {
+      workspace.primaryConnectionId = connectionId;
+      clearLicenseCaches();
+      log("connection_license_primary_bound", {
+        organizationId: workspace.organizationId,
+        teamId: workspace.teamId,
+        licenseId: workspace.id,
+        connectionId,
+        droppedConnectionLicenseId: unbilled.id,
+        movedSeats: outcome.movedSeats,
+        droppedSeats: outcome.droppedSeats,
+      });
+      return true;
+    }
+    if (outcome.subscribed) {
+      this.logOwnSubscriptionRefusal(workspace, outcome.subscribed);
+      return false;
+    }
+    return this.readWinner(workspace, connectionId);
+  }
+
+  /** Another request bound the primary first: read who won. */
+  private static async readWinner(
+    workspace: OrganizationLicense,
+    connectionId: string,
+  ): Promise<boolean> {
     const fresh = await OrganizationLicenseRepository.findOne({
       where: { id: workspace.id },
     });
     workspace.primaryConnectionId = fresh?.primaryConnectionId ?? null;
     return workspace.primaryConnectionId === connectionId;
+  }
+
+  private static logOwnSubscriptionRefusal(
+    workspace: OrganizationLicense,
+    connection: ConnectionLicense,
+  ): void {
+    log("connection_license_primary_refused", {
+      organizationId: workspace.organizationId,
+      teamId: workspace.teamId,
+      licenseId: workspace.id,
+      connectionId: connection.connectionId,
+      connectionLicenseId: connection.id,
+      reason: "own_subscription",
+    });
   }
 
   private static freeLicenceOf(workspace: OrganizationLicense, connectionId: string) {

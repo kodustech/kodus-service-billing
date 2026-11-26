@@ -687,7 +687,7 @@ router.post("/connections/release", async (req, res) => {
  *   get:
  *     tags: [Billing]
  *     summary: List a workspace's connection licences
- *     description: The primary connection id and, for every other connection, its effective plan and seats.
+ *     description: The primary connection id and, for every other connection, its effective plan and seats, and `ownSubscription` (true when it has a Stripe subscription of its own; a connection without one can still be bound as the primary).
  *     operationId: listConnectionLicenses
  *     parameters:
  *       - in: query
