@@ -407,6 +407,26 @@ describe("ConnectionLicenseService.bindPrimary / release", () => {
       expect(w.assignedLicenses).toBe(1);
     });
 
+    it("reactivates nothing when the workspace already holds an active seat for the git id among duplicates", async () => {
+      const w = workspace({ totalLicenses: 10, assignedLicenses: 1 });
+      unbilled();
+      seats.push(
+        seat("s-ws-4a", "4", null, LicenseStatus.ACTIVE, "github"),
+        seat("s-ws-4b", "4", null, LicenseStatus.INACTIVE, "gitlab"),
+        seat("s-b-4", "4", "cl-b", LicenseStatus.ACTIVE),
+      );
+
+      await ConnectionLicenseService.bindPrimary("org-1", "team-1", "gl-b");
+
+      expect(
+        seats.map((s) => [s.id, s.connectionLicenseId, s.licenseStatus]),
+      ).toEqual([
+        ["s-ws-4a", null, LicenseStatus.ACTIVE],
+        ["s-ws-4b", null, LicenseStatus.INACTIVE],
+      ]);
+      expect(w.assignedLicenses).toBe(1);
+    });
+
     it("activates no more seats than the workspace has free: the rest move in inactive", async () => {
       // One seat bought, already taken.
       const w = workspace({ totalLicenses: 1, assignedLicenses: 1 });

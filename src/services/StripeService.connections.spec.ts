@@ -50,8 +50,18 @@ jest.mock("../repositories/ConnectionLicenseRepository", () => ({
       mockCalls.push("licence.save");
       return x;
     }),
+    update: jest.fn(async (criteria: any, values: Record<string, any>) => {
+      mockCalls.push("licence.hold");
+      mockBeforeHold?.();
+      const row = find(connections, criteria);
+      if (!row) return { affected: 0 };
+      Object.assign(row, values);
+      return { affected: 1 };
+    }),
   },
 }));
+/** Runs as the hold reaches the store, e.g. a bind that got there first. */
+let mockBeforeHold: (() => void) | null = null;
 jest.mock("./ConnectionLicenseService", () => ({
   ConnectionLicenseService: {
     resolve: jest.fn(async (organizationId: string, teamId: string, connectionId?: string) => {
@@ -85,6 +95,8 @@ beforeEach(() => {
   created.length = 0;
   mockCalls.length = 0;
   (ConnectionLicenseRepository.save as jest.Mock).mockClear();
+  (ConnectionLicenseRepository.update as jest.Mock).mockClear();
+  mockBeforeHold = null;
   workspaces.length = 0;
   connections.length = 0;
   workspaces.push(
@@ -158,6 +170,27 @@ describe("subscription checkout per Git connection", () => {
   });
 
   it("records when a connection's checkout started, before opening it, so a bind waits for it", async () => {
+    const before = Date.now();
+    await StripeService.createCheckoutSession(
+      "org-1",
+      2,
+      "team-1",
+      PlanType.TEAMS_BYOK,
+      "gl-b",
+    );
+    const after = Date.now();
+
+    const startedAt = connections[0].checkoutStartedAt as Date;
+    expect(startedAt.getTime()).toBeGreaterThanOrEqual(before);
+    expect(startedAt.getTime()).toBeLessThanOrEqual(after);
+    expect(mockCalls).toEqual(["licence.hold", "stripe.checkout"]);
+  });
+
+  it("writes only the checkout start, so a subscription stored meanwhile is not overwritten", async () => {
+    mockBeforeHold = () => {
+      connections[0].stripeSubscriptionId = "sub_meanwhile";
+    };
+
     await StripeService.createCheckoutSession(
       "org-1",
       2,
@@ -166,10 +199,51 @@ describe("subscription checkout per Git connection", () => {
       "gl-b",
     );
 
-    const [saved] = (ConnectionLicenseRepository.save as jest.Mock).mock.calls[0];
-    expect(saved.id).toBe("cl-b");
-    expect(saved.checkoutStartedAt).toBeInstanceOf(Date);
-    expect(mockCalls).toEqual(["licence.save", "stripe.checkout"]);
+    expect(connections[0].stripeSubscriptionId).toBe("sub_meanwhile");
+    expect(ConnectionLicenseRepository.save).not.toHaveBeenCalled();
+    expect(
+      (ConnectionLicenseRepository.update as jest.Mock).mock.calls.map(
+        ([criteria, values]) => [criteria, Object.keys(values)],
+      ),
+    ).toEqual([[{ id: "cl-b" }, ["checkoutStartedAt"]]]);
+  });
+
+  it("opens checkout on the workspace when a bind dropped the connection's licence before the hold landed", async () => {
+    mockBeforeHold = () => {
+      // The bind made gl-b the primary and dropped its licence.
+      connections.length = 0;
+      workspaces[1].primaryConnectionId = "gl-b";
+    };
+
+    await StripeService.createCheckoutSession(
+      "org-1",
+      2,
+      "team-1",
+      PlanType.TEAMS_BYOK,
+      "gl-b",
+    );
+
+    expect(connections).toHaveLength(0);
+    expect(created).toHaveLength(1);
+    expect(created[0].metadata).toMatchObject({ licenseId: "lic-1" });
+    expect(created[0].metadata.connectionLicenseId).toBeUndefined();
+  });
+
+  it("opens no checkout when the connection's licence is gone and the connection is not the primary", async () => {
+    mockBeforeHold = () => {
+      connections.length = 0;
+    };
+
+    await expect(
+      StripeService.createCheckoutSession(
+        "org-1",
+        2,
+        "team-1",
+        PlanType.TEAMS_BYOK,
+        "gl-b",
+      ),
+    ).resolves.toBeNull();
+    expect(created).toHaveLength(0);
   });
 
   it("opens checkout for a connection's own licence, on the workspace's Stripe customer", async () => {

@@ -92,7 +92,7 @@ export class StripeService {
     planType: PlanType = PlanType.TEAMS_MANAGED_LEGACY,
     connectionId?: string
   ): Promise<string | null> {
-    const pool = await ConnectionLicenseService.resolve(
+    let pool = await ConnectionLicenseService.resolve(
       organizationId,
       teamId,
       connectionId,
@@ -100,14 +100,42 @@ export class StripeService {
     );
 
     if (!pool) return null;
-    const license = pool.workspace;
 
     // A primary bind leaves this licence alone while the checkout can still
-    // complete (ConnectionLicenseService.checkoutPending).
+    // complete (ConnectionLicenseService.checkoutPending). Only the start is
+    // written: the row may have changed since it was read.
     if (pool.connection) {
-      pool.connection.checkoutStartedAt = new Date();
-      await ConnectionLicenseRepository.save(pool.connection);
+      const held = await ConnectionLicenseRepository.update(
+        { id: pool.connection.id },
+        { checkoutStartedAt: new Date() }
+      );
+      if ((held.affected ?? 0) === 0) {
+        // A bind dropped the licence first; the connection then bills on
+        // the workspace row as its primary.
+        const again = await ConnectionLicenseService.resolve(
+          organizationId,
+          teamId,
+          connectionId
+        );
+        const nowPrimary =
+          !!again &&
+          !again.connection &&
+          again.workspace.primaryConnectionId === connectionId;
+        console.log(
+          JSON.stringify({
+            message: "checkout_connection_licence_gone",
+            organizationId,
+            teamId,
+            connectionId,
+            connectionLicenseId: pool.connection.id,
+            nowPrimary,
+          })
+        );
+        if (!nowPrimary || !again) return null;
+        pool = again;
+      }
     }
+    const license = pool.workspace;
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],

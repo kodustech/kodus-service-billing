@@ -347,10 +347,15 @@ export class ConnectionLicenseService {
             })
           : [];
         // A seat is its git id within the pool, as for every seat lookup in
-        // billing (the gate and assignments match by git id too).
-        const onWorkspace = new Map(
-          workspaceSeats.map((seat) => [seat.git_id, seat]),
-        );
+        // billing (the gate and assignments match by git id too). Among
+        // duplicates, an active one stands for the git id.
+        const onWorkspace = new Map<string, UserLicense>();
+        for (const seat of workspaceSeats) {
+          const known = onWorkspace.get(seat.git_id);
+          if (!known || known.licenseStatus !== LicenseStatus.ACTIVE) {
+            onWorkspace.set(seat.git_id, seat);
+          }
+        }
         // Seats only become active while the workspace has some free, as
         // an assignment would; the others move in inactive.
         const current = await workspaces.findOne({ where: { id: workspace.id } });
