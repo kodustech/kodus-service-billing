@@ -631,6 +631,13 @@ router.get(
  *             schema:
  *               $ref: "#/components/schemas/ApiErrorDto"
  */
+// ── Git connections of a workspace ────────────────────────────────────────
+//
+// These routes decide which connection a subscription applies to, and take
+// the workspace from the request. Only kodus-ai calls them, server to server,
+// so they sit behind the same signed service token as /credits below.
+router.use("/connections", requireServiceToken);
+
 /**
  * @openapi
  * /api/billing/connections/primary:
@@ -650,6 +657,8 @@ router.get(
  *         description: The workspace's primary connection.
  *       "400":
  *         description: Invalid request.
+ *       "401":
+ *         description: Missing or invalid service signature.
  *       "404":
  *         description: No licence for the workspace.
  */
@@ -676,6 +685,8 @@ router.post("/connections/primary", async (req, res) => {
  *         description: Whether the primary slot was freed.
  *       "400":
  *         description: Invalid request.
+ *       "401":
+ *         description: Missing or invalid service signature.
  */
 router.post("/connections/release", async (req, res) => {
   await SubscriptionController.releaseConnection(req, res);
@@ -705,6 +716,8 @@ router.post("/connections/release", async (req, res) => {
  *         description: Connection licences.
  *       "400":
  *         description: Invalid request.
+ *       "401":
+ *         description: Missing or invalid service signature.
  */
 router.get("/connections", async (req, res) => {
   await SubscriptionController.listConnectionLicenses(req, res);

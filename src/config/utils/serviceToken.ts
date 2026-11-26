@@ -2,7 +2,9 @@ import * as crypto from "crypto";
 import { NextFunction, Request, Response } from "express";
 
 /**
- * Service-to-service auth for the prepaid-credit routes.
+ * Service-to-service auth for the prepaid-credit routes and the Git
+ * connection routes (`/connections*`, which decide which connection a
+ * subscription applies to).
  *
  * WHY only these routes: this service has never authenticated its callers —
  * every route takes the organizationId from the request and trusts it. The
@@ -44,8 +46,9 @@ import { NextFunction, Request, Response } from "express";
  * (`x-kodus-signature`, HMAC-SHA256).
  *
  * Callers that must sign: the API's metering sweep (`/credits/debit` via
- * AxiosLicenseService) and the web's SERVER-side billing fetches. No browser
- * ever needs this — the web proxy denies `/credits/*` outright.
+ * AxiosLicenseService), its connection calls (same client), and the web's
+ * SERVER-side billing fetches. No browser ever needs this — the web proxy
+ * denies `/credits/*` and `/connections*` outright.
  */
 export const SIGNATURE_HEADER = "x-kodus-signature";
 export const TIMESTAMP_HEADER = "x-kodus-timestamp";
@@ -88,7 +91,7 @@ export function serviceSecret(): string {
 
 let secretSourceLogged = false;
 
-/** Say once, at the first credit request, which secrets are in play. */
+/** Say once, at the first signed request, which secrets are in play. */
 function logSecretSource(): void {
   if (secretSourceLogged) return;
   secretSourceLogged = true;
@@ -96,13 +99,13 @@ function logSecretSource(): void {
   const webhook = (process.env[WEBHOOK_SECRET_ENV] ?? "").trim();
   if (dedicated && webhook) {
     console.warn(
-      `Credit routes accept BOTH ${SERVICE_TOKEN_ENV} and ${WEBHOOK_SECRET_ENV}. ` +
+      `Signed routes accept BOTH ${SERVICE_TOKEN_ENV} and ${WEBHOOK_SECRET_ENV}. ` +
         `The shared webhook secret is the contract; unset ${SERVICE_TOKEN_ENV} ` +
         `once no caller signs with it.`,
     );
   } else {
     console.log(
-      `Credit routes authenticated with ${
+      `Signed routes authenticated with ${
         dedicated ? SERVICE_TOKEN_ENV : WEBHOOK_SECRET_ENV
       }.`,
     );
@@ -160,7 +163,7 @@ export function requireServiceToken(
   if (secrets.length === 0) {
     console.error(
       `Neither ${SERVICE_TOKEN_ENV} nor ${WEBHOOK_SECRET_ENV} is configured — ` +
-        `refusing credit routes. Set the webhook secret (already required for ` +
+        `refusing signed routes. Set the webhook secret (already required for ` +
         `outbound notifications) to enable prepaid credits.`,
     );
     res.status(500).json({ error: "Service secret not configured" });
@@ -171,7 +174,7 @@ export function requireServiceToken(
   const provided = req.header(SIGNATURE_HEADER);
   if (!provided) {
     console.warn(
-      `Rejected a credit request with no ${SIGNATURE_HEADER}: ${req.method} ${req.path}`,
+      `Rejected a signed-route request with no ${SIGNATURE_HEADER}: ${req.method} ${req.path}`,
     );
     res.status(401).json({ error: "Unauthorized" });
     return;
@@ -187,7 +190,7 @@ export function requireServiceToken(
     Math.abs(Date.now() - timestampMs) > SIGNATURE_MAX_SKEW_MS
   ) {
     console.warn(
-      `Rejected a credit request with a missing or stale ${TIMESTAMP_HEADER} ` +
+      `Rejected a signed-route request with a missing or stale ${TIMESTAMP_HEADER} ` +
         `(${timestamp || "absent"}): ${req.method} ${req.path}`,
     );
     res.status(401).json({ error: "Unauthorized" });
@@ -220,7 +223,7 @@ export function requireServiceToken(
 
   if (!secrets.some((secret) => matches(provided, sign(secret, payload)))) {
     console.warn(
-      `Rejected a credit request with an invalid ${SIGNATURE_HEADER}: ` +
+      `Rejected a signed-route request with an invalid ${SIGNATURE_HEADER}: ` +
         `${req.method} ${fullPath}`,
     );
     res.status(401).json({ error: "Unauthorized" });

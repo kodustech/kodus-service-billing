@@ -12,20 +12,23 @@ import {
 } from "../config/utils/serviceToken";
 
 /**
- * The `/credits/*` routes move money and take the organizationId from the
- * request, so the ONLY thing standing in front of them is one line in
- * subscription.routes.ts:
+ * The `/credits/*` routes move money and the `/connections*` routes decide
+ * which Git connection a subscription applies to; both take the tenant from
+ * the request, so the ONLY thing standing in front of them is one line each
+ * in subscription.routes.ts:
  *
  *     router.use("/credits", requireServiceToken);
+ *     router.use("/connections", requireServiceToken);
  *
- * A unit test of the middleware cannot see that line. Delete it, or let a
- * route-grouping refactor register a credit route above it, and every unit
- * test still passes while the balance, the ledger and the debit endpoint are
- * open to anything that can reach the service.
+ * A unit test of the middleware cannot see those lines. Delete one, or let a
+ * route-grouping refactor register a route above it, and every unit test
+ * still passes while the routes behind it are open to anything that can
+ * reach the service.
  *
  * So this test speaks HTTP to the REAL router: it enumerates every registered
- * `/credits/*` route and asserts each one answers 401 unsigned and gets
- * through when signed. A new credit route added in the wrong place fails here.
+ * route under each guarded prefix and asserts each one answers 401 unsigned
+ * and gets through when signed. A new route added in the wrong place fails
+ * here.
  *
  * The controller is stubbed (it would need Postgres and Stripe); the router,
  * the guard and express's body parsing are the real thing.
@@ -50,27 +53,51 @@ jest.mock("../middlewares/cacheMiddleware", () => ({
 
 const SECRET = "shared-webhook-secret";
 
-type CreditRoute = { method: string; path: string };
+type GuardedRoute = { method: string; path: string };
 
-/** Every `/credits/*` route the router actually registers. */
-function creditRoutes(router: express.Router): CreditRoute[] {
-  const out: CreditRoute[] = [];
+/** Every route the router actually registers under `prefix`. */
+function routesUnder(router: express.Router, prefix: string): GuardedRoute[] {
+  const out: GuardedRoute[] = [];
   for (const layer of (router as unknown as { stack: any[] }).stack) {
     const route = layer?.route;
-    if (!route?.path || !String(route.path).startsWith("/credits")) continue;
+    const path = String(route?.path ?? "");
+    if (path !== prefix && !path.startsWith(`${prefix}/`)) continue;
     const methods = route.methods ?? layer.route?.methods ?? {};
     for (const method of Object.keys(methods)) {
-      if (methods[method])
-        out.push({ method: method.toUpperCase(), path: route.path });
+      if (methods[method]) out.push({ method: method.toUpperCase(), path });
     }
   }
   return out;
 }
 
-describe("/credits/* is guarded at the router, not just in theory", () => {
+const GUARDED: Array<{ prefix: string; floor: number; expected: string[] }> = [
+  {
+    prefix: "/credits",
+    floor: 8,
+    expected: [
+      "DELETE /credits/payment-method",
+      "GET /credits/balance",
+      "GET /credits/ledger",
+      "POST /credits/adjust",
+      "POST /credits/checkout",
+      "POST /credits/debit",
+    ],
+  },
+  {
+    prefix: "/connections",
+    floor: 3,
+    expected: [
+      "GET /connections",
+      "POST /connections/primary",
+      "POST /connections/release",
+    ],
+  },
+];
+
+describe("service-to-service routes are guarded at the router, not just in theory", () => {
   let server: Server;
   let base: string;
-  let routes: CreditRoute[];
+  let router: express.Router;
   let savedWebhook: string | undefined;
 
   beforeAll(async () => {
@@ -79,8 +106,7 @@ describe("/credits/* is guarded at the router, not just in theory", () => {
     jest.spyOn(console, "warn").mockImplementation(() => undefined);
     jest.spyOn(console, "log").mockImplementation(() => undefined);
 
-    const { default: router } = await import("./subscription.routes");
-    routes = creditRoutes(router);
+    router = (await import("./subscription.routes")).default;
 
     const app = express();
     app.use(express.json({ verify: captureRawBody }));
@@ -99,14 +125,14 @@ describe("/credits/* is guarded at the router, not just in theory", () => {
   });
 
   const call = async (
-    route: CreditRoute,
+    route: GuardedRoute,
     opts: { signed: boolean } = { signed: false },
   ) => {
-    const query = "organizationId=org-1";
+    const query = "organizationId=org-1&teamId=team-1";
     const url = `/api/billing${route.path}?${query}`;
     const sendsBody = route.method !== "GET" && route.method !== "DELETE";
     const rawBody = sendsBody
-      ? JSON.stringify({ organizationId: "org-1" })
+      ? JSON.stringify({ organizationId: "org-1", teamId: "team-1" })
       : "";
     const headers: Record<string, string> = sendsBody
       ? { "Content-Type": "application/json" }
@@ -133,40 +159,36 @@ describe("/credits/* is guarded at the router, not just in theory", () => {
     });
   };
 
-  it("registers the credit routes it is supposed to", () => {
-    // A sanity floor: if the enumeration ever returns nothing, the assertions
-    // below would pass vacuously.
-    expect(routes.length).toBeGreaterThanOrEqual(8);
-    expect(routes.map((r) => `${r.method} ${r.path}`).sort()).toEqual(
-      expect.arrayContaining([
-        "DELETE /credits/payment-method",
-        "GET /credits/balance",
-        "GET /credits/ledger",
-        "POST /credits/adjust",
-        "POST /credits/checkout",
-        "POST /credits/debit",
-      ]),
-    );
-  });
+  describe.each(GUARDED)("$prefix", ({ prefix, floor, expected }) => {
+    it("registers the routes it is supposed to", () => {
+      const routes = routesUnder(router, prefix);
+      // A sanity floor: if the enumeration ever returns nothing, the
+      // assertions below would pass vacuously.
+      expect(routes.length).toBeGreaterThanOrEqual(floor);
+      expect(routes.map((r) => `${r.method} ${r.path}`).sort()).toEqual(
+        expect.arrayContaining(expected),
+      );
+    });
 
-  it("answers 401 on every credit route when the request is not signed", async () => {
-    for (const route of routes) {
-      const res = await call(route);
-      expect({
-        route: `${route.method} ${route.path}`,
-        status: res.status,
-      }).toEqual({ route: `${route.method} ${route.path}`, status: 401 });
-    }
-  });
+    it("answers 401 on every route when the request is not signed", async () => {
+      for (const route of routesUnder(router, prefix)) {
+        const res = await call(route);
+        expect({
+          route: `${route.method} ${route.path}`,
+          status: res.status,
+        }).toEqual({ route: `${route.method} ${route.path}`, status: 401 });
+      }
+    });
 
-  it("lets a correctly signed request through on every credit route", async () => {
-    for (const route of routes) {
-      const res = await call(route, { signed: true });
-      expect({
-        route: `${route.method} ${route.path}`,
-        status: res.status,
-      }).toEqual({ route: `${route.method} ${route.path}`, status: 200 });
-    }
+    it("lets a correctly signed request through on every route", async () => {
+      for (const route of routesUnder(router, prefix)) {
+        const res = await call(route, { signed: true });
+        expect({
+          route: `${route.method} ${route.path}`,
+          status: res.status,
+        }).toEqual({ route: `${route.method} ${route.path}`, status: 200 });
+      }
+    });
   });
 
   it("does not guard the routes that were always public (no regression)", async () => {
