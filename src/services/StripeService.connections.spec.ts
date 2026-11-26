@@ -208,30 +208,12 @@ describe("subscription checkout per Git connection", () => {
     ).toEqual([[{ id: "cl-b" }, ["checkoutStartedAt"]]]);
   });
 
-  it("opens checkout on the workspace when a bind dropped the connection's licence before the hold landed", async () => {
+  it("opens no checkout when a bind dropped the connection's licence before the hold landed, so a subscribed workspace never gets a second subscription", async () => {
+    workspaces[1].stripeSubscriptionId = "sub_workspace";
     mockBeforeHold = () => {
       // The bind made gl-b the primary and dropped its licence.
       connections.length = 0;
       workspaces[1].primaryConnectionId = "gl-b";
-    };
-
-    await StripeService.createCheckoutSession(
-      "org-1",
-      2,
-      "team-1",
-      PlanType.TEAMS_BYOK,
-      "gl-b",
-    );
-
-    expect(connections).toHaveLength(0);
-    expect(created).toHaveLength(1);
-    expect(created[0].metadata).toMatchObject({ licenseId: "lic-1" });
-    expect(created[0].metadata.connectionLicenseId).toBeUndefined();
-  });
-
-  it("opens no checkout when the connection's licence is gone and the connection is not the primary", async () => {
-    mockBeforeHold = () => {
-      connections.length = 0;
     };
 
     await expect(

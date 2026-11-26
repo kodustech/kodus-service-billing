@@ -92,7 +92,7 @@ export class StripeService {
     planType: PlanType = PlanType.TEAMS_MANAGED_LEGACY,
     connectionId?: string
   ): Promise<string | null> {
-    let pool = await ConnectionLicenseService.resolve(
+    const pool = await ConnectionLicenseService.resolve(
       organizationId,
       teamId,
       connectionId,
@@ -110,17 +110,8 @@ export class StripeService {
         { checkoutStartedAt: new Date() }
       );
       if ((held.affected ?? 0) === 0) {
-        // A bind dropped the licence first; the connection then bills on
-        // the workspace row as its primary.
-        const again = await ConnectionLicenseService.resolve(
-          organizationId,
-          teamId,
-          connectionId
-        );
-        const nowPrimary =
-          !!again &&
-          !again.connection &&
-          again.workspace.primaryConnectionId === connectionId;
+        // A bind dropped the licence first. Its seats are now the
+        // workspace's, which may already be subscribed: no checkout here.
         console.log(
           JSON.stringify({
             message: "checkout_connection_licence_gone",
@@ -128,11 +119,9 @@ export class StripeService {
             teamId,
             connectionId,
             connectionLicenseId: pool.connection.id,
-            nowPrimary,
           })
         );
-        if (!nowPrimary || !again) return null;
-        pool = again;
+        return null;
       }
     }
     const license = pool.workspace;
