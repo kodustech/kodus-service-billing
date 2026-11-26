@@ -45,9 +45,12 @@ export class ConnectionLicense {
   @Column()
   connectionId: string;
 
+  // Both enums are the workspace licence's Postgres types, so a new value is
+  // one ALTER TYPE for both tables.
   @Column({
     type: "enum",
     enum: SubscriptionStatus,
+    enumName: "organization_licenses_subscriptionstatus_enum",
     default: SubscriptionStatus.ACTIVE,
   })
   subscriptionStatus: SubscriptionStatus;
@@ -55,6 +58,7 @@ export class ConnectionLicense {
   @Column({
     type: "enum",
     enum: PlanType,
+    enumName: "organization_licenses_plantype_enum",
     default: PlanType.FREE_BYOK,
   })
   planType: PlanType;

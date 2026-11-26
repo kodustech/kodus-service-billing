@@ -8,20 +8,16 @@ export class AddConnectionLicenses1795600000000 implements MigrationInterface {
     await queryRunner.query(`ALTER TABLE "billing"."organization_licenses"
       ADD COLUMN "primaryConnectionId" varchar`);
 
-    await queryRunner.query(`CREATE TYPE "billing"."connection_licenses_subscriptionstatus_enum"
-      AS ENUM ('trial', 'active', 'payment_failed', 'canceled', 'expired')`);
-    await queryRunner.query(`CREATE TYPE "billing"."connection_licenses_plantype_enum"
-      AS ENUM ('free_byok', 'teams_byok', 'teams_byok_annual', 'teams_managed',
-        'teams_managed_annual', 'teams_managed_legacy', 'enterprise_byok',
-        'enterprise_byok_annual', 'enterprise_managed', 'enterprise_managed_annual')`);
+    // Plan type and status reuse the organization_licenses enum types, so a
+    // new value is one ALTER TYPE for both tables.
     await queryRunner.query(`CREATE TABLE "billing"."connection_licenses" (
       "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
       "organizationLicenseId" uuid NOT NULL,
       "organizationId" varchar NOT NULL,
       "teamId" varchar NOT NULL,
       "connectionId" varchar NOT NULL,
-      "subscriptionStatus" "billing"."connection_licenses_subscriptionstatus_enum" NOT NULL DEFAULT 'active',
-      "planType" "billing"."connection_licenses_plantype_enum" NOT NULL DEFAULT 'free_byok',
+      "subscriptionStatus" "billing"."organization_licenses_subscriptionstatus_enum" NOT NULL DEFAULT 'active',
+      "planType" "billing"."organization_licenses_plantype_enum" NOT NULL DEFAULT 'free_byok',
       "stripeSubscriptionId" varchar,
       "totalLicenses" integer NOT NULL DEFAULT 0,
       "assignedLicenses" integer NOT NULL DEFAULT 0,
@@ -54,8 +50,6 @@ export class AddConnectionLicenses1795600000000 implements MigrationInterface {
       DROP COLUMN "git_host",
       DROP COLUMN "connectionLicenseId"`);
     await queryRunner.query(`DROP TABLE "billing"."connection_licenses"`);
-    await queryRunner.query(`DROP TYPE "billing"."connection_licenses_plantype_enum"`);
-    await queryRunner.query(`DROP TYPE "billing"."connection_licenses_subscriptionstatus_enum"`);
     await queryRunner.query(`ALTER TABLE "billing"."organization_licenses"
       DROP COLUMN "primaryConnectionId"`);
     // 'forgejo' stays in user_licenses_git_tool_enum: Postgres cannot drop an
