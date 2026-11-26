@@ -139,6 +139,23 @@ export function buildOpenApiSpec() {
             updatedAt: { type: "string", format: "date-time" },
           },
         },
+        TrialTermsDto: {
+          type: "object",
+          required: ["trialDays", "trialReviewCreditsIncluded"],
+          properties: {
+            trialDays: {
+              type: "integer",
+              example: 14,
+              description: "Length of a trial started now (TRIAL_DURATION).",
+            },
+            trialReviewCreditsIncluded: {
+              type: "integer",
+              example: 5,
+              description:
+                "Kodus-paid PR reviews a trial started now includes (TRIAL_REVIEW_CREDITS_INCLUDED).",
+            },
+          },
+        },
         TrialUnlockDto: {
           type: "object",
           required: ["key", "status"],
@@ -261,6 +278,11 @@ export function buildOpenApiSpec() {
             valid: { type: "boolean", example: true },
             subscriptionStatus: { $ref: "#/components/schemas/SubscriptionStatus" },
             planType: { $ref: "#/components/schemas/PlanType" },
+            trialStart: {
+              type: "string",
+              format: "date-time",
+              description: "When the trial started. Present only on a trial.",
+            },
             trialEnd: { type: "string", format: "date-time" },
             numberOfLicenses: { type: "integer", example: 20 },
             stripeCustomerId: { type: "string" },
@@ -581,6 +603,11 @@ export function buildOpenApiSpec() {
             valid: { type: "boolean", example: true },
             subscriptionStatus: { $ref: "#/components/schemas/SubscriptionStatus" },
             planType: { $ref: "#/components/schemas/PlanType" },
+            trialStart: {
+              type: "string",
+              format: "date-time",
+              description: "When the trial started. Present only on a trial.",
+            },
             trialEnd: { type: "string", format: "date-time" },
             byok: { type: "boolean", example: false },
             trialReviewCreditsTotal: { type: "integer", example: 35 },

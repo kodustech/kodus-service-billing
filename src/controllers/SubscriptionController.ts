@@ -117,6 +117,10 @@ export class SubscriptionController {
         }
     }
 
+    static getTrialTerms(req: Request, res: Response): Response {
+        return res.json(OrganizationLicenseService.getTrialTerms());
+    }
+
     static async validateLicense(
         req: Request,
         res: Response,
