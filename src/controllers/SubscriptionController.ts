@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import { OrganizationLicenseService } from "../services/OrganizationLicenseService";
-import { StripeService } from "../services/StripeService";
+import { CheckoutRetryError, StripeService } from "../services/StripeService";
 import { PlanType } from "../entities/OrganizationLicense";
 import Stripe from "stripe";
 import validateAdminToken from "../config/utils/adminToken";
@@ -88,6 +88,11 @@ export class SubscriptionController {
 
             return res.json({ url: checkoutUrl });
         } catch (error) {
+            if (error instanceof CheckoutRetryError) {
+                return res
+                    .status(409)
+                    .json({ error: "CHECKOUT_RETRY", message: error.message });
+            }
             console.error("Erro ao criar sessão de checkout:", error);
             return res
                 .status(500)

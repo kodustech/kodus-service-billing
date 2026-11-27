@@ -9,6 +9,7 @@ jest.mock("../services/OrganizationLicenseService", () => ({
   },
 }));
 jest.mock("../services/StripeService", () => ({
+  CheckoutRetryError: class CheckoutRetryError extends Error {},
   StripeService: { createCheckoutSession: jest.fn(async () => "https://stripe") },
 }));
 jest.mock("../services/ConnectionLicenseService", () => ({
@@ -34,7 +35,7 @@ jest.mock("../services/CreditService", () => ({ CreditService: {} }));
 
 import { SubscriptionController } from "./SubscriptionController";
 import { OrganizationLicenseService } from "../services/OrganizationLicenseService";
-import { StripeService } from "../services/StripeService";
+import { CheckoutRetryError, StripeService } from "../services/StripeService";
 import { ConnectionLicenseService } from "../services/ConnectionLicenseService";
 
 const response = () => {
@@ -237,5 +238,29 @@ describe("connection-aware billing routes", () => {
     );
 
     expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it("answers 409 CHECKOUT_RETRY when a primary bind displaced the checkout, so the caller can tell a retryable race from a missing licence", async () => {
+    (StripeService.createCheckoutSession as jest.Mock).mockRejectedValueOnce(
+      new CheckoutRetryError(),
+    );
+    const res = response();
+
+    await SubscriptionController.createCheckoutSession(
+      {
+        body: {
+          organizationId: "org-1",
+          quantity: 2,
+          teamId: "team-1",
+          connectionId: "gl-b",
+        },
+      } as any,
+      res,
+    );
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ error: "CHECKOUT_RETRY" }),
+    );
   });
 });

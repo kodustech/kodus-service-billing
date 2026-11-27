@@ -85,7 +85,7 @@ jest.mock("./KodusNotificationClient", () => ({
 jest.mock("./CreditService", () => ({ CreditService: {} }));
 jest.mock("./AutoTopUpService", () => ({ AutoTopUpService: {} }));
 
-import { StripeService } from "./StripeService";
+import { CheckoutRetryError, StripeService } from "./StripeService";
 import { ConnectionLicenseService } from "./ConnectionLicenseService";
 import { PlanType, SubscriptionStatus } from "../entities/OrganizationLicense";
 import { KodusNotificationClient } from "./KodusNotificationClient";
@@ -208,7 +208,7 @@ describe("subscription checkout per Git connection", () => {
     ).toEqual([[{ id: "cl-b" }, ["checkoutStartedAt"]]]);
   });
 
-  it("opens no checkout when a bind dropped the connection's licence before the hold landed, so a subscribed workspace never gets a second subscription", async () => {
+  it("opens no checkout and asks for a retry when a bind dropped the connection's licence before the hold landed, so a subscribed workspace never gets a second subscription", async () => {
     workspaces[1].stripeSubscriptionId = "sub_workspace";
     mockBeforeHold = () => {
       // The bind made gl-b the primary and dropped its licence.
@@ -224,7 +224,7 @@ describe("subscription checkout per Git connection", () => {
         PlanType.TEAMS_BYOK,
         "gl-b",
       ),
-    ).resolves.toBeNull();
+    ).rejects.toBeInstanceOf(CheckoutRetryError);
     expect(created).toHaveLength(0);
   });
 

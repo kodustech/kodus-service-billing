@@ -51,6 +51,16 @@ export class CreditCurrencyNotSupportedError extends Error {
   }
 }
 
+/** A primary bind dropped the connection's licence while its checkout was
+ *  opening. Nothing was charged; asking again bills the workspace. */
+export class CheckoutRetryError extends Error {
+  readonly code = "CHECKOUT_RETRY";
+  constructor() {
+    super("The connection's billing changed while checkout was opening. Try again.");
+    this.name = "CheckoutRetryError";
+  }
+}
+
 /**
  * Minor-unit price of ONE credit unit (US$1 of credit, markup included) in
  * `currency`: the Price's own `unit_amount` for its default currency, the
@@ -121,7 +131,7 @@ export class StripeService {
             connectionLicenseId: pool.connection.id,
           })
         );
-        return null;
+        throw new CheckoutRetryError();
       }
     }
     const license = pool.workspace;
