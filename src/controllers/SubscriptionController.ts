@@ -1,12 +1,23 @@
 import { Request, Response } from "express";
 import { OrganizationLicenseService } from "../services/OrganizationLicenseService";
-import { StripeService } from "../services/StripeService";
+import { CheckoutRetryError, StripeService } from "../services/StripeService";
 import { PlanType } from "../entities/OrganizationLicense";
 import Stripe from "stripe";
 import validateAdminToken from "../config/utils/adminToken";
 import { PlanCatalogService } from "../services/PlanCatalogService";
 import { AutoTopUpService, PendingAutoTopUpError } from "../services/AutoTopUpService";
 import { CreditService } from "../services/CreditService";
+import { ConnectionLicenseService } from "../services/ConnectionLicenseService";
+
+/** A connection id from a query or body; anything but a non-empty string is absent. */
+const connectionIdOf = (value: unknown): string | undefined =>
+    typeof value === "string" && value.trim() ? value.trim() : undefined;
+
+/** Name and message only: a raw error can carry request details. */
+const errorSummary = (error: unknown) =>
+    error instanceof Error
+        ? { name: error.name, message: error.message }
+        : { message: String(error) };
 
 export class SubscriptionController {
     static async createTrial(req: Request, res: Response): Promise<Response> {
@@ -55,7 +66,8 @@ export class SubscriptionController {
         res: Response,
     ): Promise<Response> {
         try {
-            const { organizationId, quantity, teamId, planType } = req.body;
+            const { organizationId, quantity, teamId, planType, connectionId } =
+                req.body;
 
             if (!organizationId || !quantity || !teamId) {
                 return res.status(400).json({
@@ -68,10 +80,19 @@ export class SubscriptionController {
                 quantity,
                 teamId,
                 planType || PlanType.TEAMS_MANAGED_LEGACY,
+                connectionIdOf(connectionId),
             );
+            if (checkoutUrl === null) {
+                return res.status(404).json({ error: "LICENSE_NOT_FOUND" });
+            }
 
             return res.json({ url: checkoutUrl });
         } catch (error) {
+            if (error instanceof CheckoutRetryError) {
+                return res
+                    .status(409)
+                    .json({ error: "CHECKOUT_RETRY", message: error.message });
+            }
             console.error("Erro ao criar sessão de checkout:", error);
             return res
                 .status(500)
@@ -126,7 +147,7 @@ export class SubscriptionController {
         res: Response,
     ): Promise<Response> {
         try {
-            const { organizationId, teamId } = req.query;
+            const { organizationId, teamId, connectionId } = req.query;
 
             if (!organizationId) {
                 return res.status(400).json({
@@ -137,6 +158,7 @@ export class SubscriptionController {
             const result = await OrganizationLicenseService.validateLicense(
                 organizationId as string,
                 teamId as string,
+                connectionIdOf(connectionId),
             );
 
             return res.json(result);
@@ -210,8 +232,14 @@ export class SubscriptionController {
 
     static async assignLicense(req: Request, res: Response): Promise<Response> {
         try {
-            const { organizationId, users, teamId, editedBy, userName } =
-                req.body;
+            const {
+                organizationId,
+                users,
+                teamId,
+                editedBy,
+                userName,
+                connectionId,
+            } = req.body;
 
             if (!organizationId || !teamId) {
                 return res.status(400).json({
@@ -246,6 +274,7 @@ export class SubscriptionController {
                     organizationId,
                     teamId,
                     usersArray,
+                    connectionIdOf(connectionId),
                 );
 
             if (results.successful.length > 0) {
@@ -280,7 +309,7 @@ export class SubscriptionController {
         res: Response,
     ): Promise<Response> {
         try {
-            const { organizationId, gitId, teamId } = req.query;
+            const { organizationId, gitId, teamId, connectionId } = req.query;
 
             if (!organizationId || !gitId || !teamId) {
                 return res.status(400).json({
@@ -292,6 +321,7 @@ export class SubscriptionController {
                 organizationId as string,
                 gitId as string,
                 teamId as string,
+                connectionIdOf(connectionId),
             );
 
             return res.status(200).json(license);
@@ -308,7 +338,7 @@ export class SubscriptionController {
         res: Response,
     ): Promise<Response> {
         try {
-            const { organizationId, teamId } = req.query;
+            const { organizationId, teamId, connectionId } = req.query;
 
             if (!organizationId || !teamId) {
                 return res.status(400).json({
@@ -320,6 +350,7 @@ export class SubscriptionController {
                 await OrganizationLicenseService.getAllUsersWithLicense(
                     organizationId as string,
                     teamId as string,
+                    connectionIdOf(connectionId),
                 );
 
             return res.status(200).json(licenses);
@@ -328,6 +359,125 @@ export class SubscriptionController {
             return res.status(500).json({
                 error: "Erro ao buscar usuários com licença",
             });
+        }
+    }
+
+    // ── Git connections of a workspace ─────────────────────────────────
+
+    static async bindPrimaryConnection(
+        req: Request,
+        res: Response,
+    ): Promise<Response> {
+        try {
+            const { organizationId, teamId } = req.body ?? {};
+            const connectionId = connectionIdOf(req.body?.connectionId);
+            if (!organizationId || !teamId || !connectionId) {
+                return res.status(400).json({
+                    error: "organizationId, teamId and connectionId are required",
+                });
+            }
+
+            const result = await ConnectionLicenseService.bindPrimary(
+                organizationId,
+                teamId,
+                connectionId,
+            );
+            if (!result.found) {
+                return res.status(404).json({ error: "LICENSE_NOT_FOUND" });
+            }
+            return res.json(result);
+        } catch (error) {
+            console.error("Error binding the primary connection:", errorSummary(error));
+            return res
+                .status(500)
+                .json({ error: "Error binding the primary connection" });
+        }
+    }
+
+    static async releaseConnection(
+        req: Request,
+        res: Response,
+    ): Promise<Response> {
+        try {
+            const { organizationId, teamId } = req.body ?? {};
+            const connectionId = connectionIdOf(req.body?.connectionId);
+            if (!organizationId || !teamId || !connectionId) {
+                return res.status(400).json({
+                    error: "organizationId, teamId and connectionId are required",
+                });
+            }
+
+            return res.json(
+                await ConnectionLicenseService.release(
+                    organizationId,
+                    teamId,
+                    connectionId,
+                ),
+            );
+        } catch (error) {
+            console.error("Error releasing the connection:", errorSummary(error));
+            return res
+                .status(500)
+                .json({ error: "Error releasing the connection" });
+        }
+    }
+
+    static async listConnectionLicenses(
+        req: Request,
+        res: Response,
+    ): Promise<Response> {
+        try {
+            const { organizationId, teamId } = req.query;
+            if (!organizationId || !teamId) {
+                return res.status(400).json({
+                    error: "organizationId and teamId are required",
+                });
+            }
+
+            const pool = await ConnectionLicenseService.resolve(
+                organizationId as string,
+                teamId as string,
+            );
+            if (!pool) {
+                return res.json({ primaryConnectionId: null, connections: [] });
+            }
+
+            const connections = await ConnectionLicenseService.listForWorkspace(
+                pool.workspace,
+            );
+            const primaryConnectionId = pool.workspace.primaryConnectionId ?? null;
+            return res.json({
+                primaryConnectionId,
+                connections: await Promise.all(
+                    connections.map(async (connection) => {
+                        const ownSubscription =
+                            ConnectionLicenseService.hasOwnSubscription(connection);
+                        // While no primary is bound, a connection without a
+                        // subscription of its own bills on the workspace:
+                        // described as seat checks read it.
+                        const plan =
+                            !ownSubscription && !primaryConnectionId
+                                ? {
+                                      ...(await OrganizationLicenseService.validateLicense(
+                                          organizationId as string,
+                                          teamId as string,
+                                          connection.connectionId,
+                                      )),
+                                      connectionId: connection.connectionId,
+                                  }
+                                : ConnectionLicenseService.describe(
+                                      pool.workspace,
+                                      connection,
+                                  );
+                        return { ...plan, ownSubscription };
+                    }),
+                ),
+            });
+        } catch (error) {
+            console.error("Error listing connection licences:", errorSummary(error));
+            return res
+                .status(500)
+                .json({ error: "Error listing connection licences" });
         }
     }
 
@@ -720,6 +870,18 @@ export class SubscriptionController {
                 return res.status(400).json({
                     error: "entries: máximo de 500 itens por chamada",
                 });
+            }
+
+            if (!teamId) {
+                // Without a team the debit lands on whichever workspace of
+                // the organization is found first.
+                console.warn(
+                    JSON.stringify({
+                        message: "credits_debit_without_team",
+                        organizationId,
+                        entries: entries.length,
+                    }),
+                );
             }
 
             const result = await CreditService.debit({

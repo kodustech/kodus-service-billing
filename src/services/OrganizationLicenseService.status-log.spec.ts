@@ -6,6 +6,9 @@ jest.mock("../config/database", () => ({ AppDataSource: {} }));
 jest.mock("../repositories/OrganizationLicenseRepository", () => ({
   OrganizationLicenseRepository: {},
 }));
+jest.mock("../repositories/ConnectionLicenseRepository", () => ({
+    ConnectionLicenseRepository: {},
+}));
 jest.mock("../repositories/UserLicenseRepository", () => ({
   UserLicenseRepository: {},
 }));

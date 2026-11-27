@@ -8,6 +8,7 @@ import {
   Index,
 } from "typeorm";
 import { OrganizationLicense } from "./OrganizationLicense";
+import { ConnectionLicense } from "./ConnectionLicense";
 
 export enum LicenseStatus {
   ACTIVE = "active",
@@ -19,6 +20,7 @@ export enum GitTool {
   GITLAB = "gitlab",
   BITBUCKET = "bitbucket",
   AZURE_REPOS = "azure_repos",
+  FORGEJO = "forgejo",
 }
 
 @Entity("user_licenses")
@@ -27,6 +29,7 @@ export enum GitTool {
 @Index("IDX_user_licenses_git_id", ["git_id"])
 @Index("IDX_user_licenses_git_id_tool", ["git_id", "git_tool"])
 @Index("IDX_user_licenses_license_status", ["licenseStatus"])
+@Index("IDX_user_licenses_connection_license_status", ["connectionLicenseId", "licenseStatus"])
 export class UserLicense {
   @PrimaryGeneratedColumn("uuid")
   id: string;
@@ -56,6 +59,18 @@ export class UserLicense {
   @ManyToOne(() => OrganizationLicense)
   @JoinColumn({ name: "organizationLicenseId" })
   organizationLicense: OrganizationLicense;
+
+  /** Null: a seat of the workspace's primary connection. */
+  @Column({ type: "uuid", nullable: true })
+  connectionLicenseId: string | null;
+
+  @ManyToOne(() => ConnectionLicense, { onDelete: "CASCADE" })
+  @JoinColumn({ name: "connectionLicenseId" })
+  connectionLicense?: ConnectionLicense;
+
+  /** Server the git id belongs to (github.com, a GitLab host...). */
+  @Column({ type: "varchar", nullable: true })
+  git_host: string | null;
 
   @CreateDateColumn()
   createdAt: Date;

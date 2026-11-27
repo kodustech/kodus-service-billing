@@ -9,7 +9,9 @@ import {
     TrialUnlockStatus,
 } from "../entities/OrganizationLicense";
 import { UserLicense, GitTool, LicenseStatus } from "../entities/UserLicense";
-import { Between, In, LessThan } from "typeorm";
+import { Between, In, IsNull, LessThan } from "typeorm";
+import { ConnectionLicenseRepository } from "../repositories/ConnectionLicenseRepository";
+import { ConnectionLicenseService, SeatPool } from "./ConnectionLicenseService";
 import { clearCacheByPrefix } from "../config/utils/cache";
 import { buildLogApiUrl } from "../config/utils/urlBuilder";
 import {
@@ -218,6 +220,46 @@ export const normalizeTrialCredits = (
     return changed;
 };
 
+/** Higher is better: a valid plan beats an invalid one, then by tier. */
+const planRank = (license: {
+    valid: boolean;
+    planType?: PlanType;
+    subscriptionStatus?: SubscriptionStatus;
+}): number => {
+    if (!license.valid) return 0;
+    if (license.subscriptionStatus === SubscriptionStatus.TRIAL) return 2;
+    const plan = license.planType ?? "";
+    if (plan.startsWith("enterprise")) return 5;
+    if (plan.startsWith("teams")) return 4;
+    if (plan === PlanType.FREE_BYOK) return 1;
+    return 1;
+};
+
+type SeatRequest = {
+    gitId: string;
+    gitTool: GitTool;
+    gitHost?: string;
+    licenseStatus: LicenseStatus;
+};
+
+/** The seats of one pool: a connection's licence, or the workspace row. */
+const seatScope = (pool: SeatPool) =>
+    pool.connection
+        ? { connectionLicenseId: pool.connection.id }
+        : {
+              organizationLicenseId: pool.workspace.id,
+              connectionLicenseId: IsNull(),
+          };
+
+/**
+ * Whether a pool's seats count: a connection's only while its licence exists
+ * and is valid. The workspace row's own status is checked by its callers.
+ */
+const holdsSeats = (pool: SeatPool) =>
+    !pool.connection ||
+    (Boolean(pool.connection.id) &&
+        ConnectionLicenseService.describe(pool.workspace, pool.connection).valid);
+
 const buildTrialCreditPayload = (license: OrganizationLicense) => ({
     byok: isByokPlan(license.planType),
     trialReviewCreditsTotal: license.trialReviewCreditsTotal,
@@ -286,42 +328,46 @@ export class OrganizationLicenseService {
     static async assignLicensesToUsers(
         organizationId: string,
         teamId: string,
-        users: Array<{
-            gitId: string;
-            gitTool: GitTool;
-            licenseStatus: LicenseStatus;
-        }>,
+        users: SeatRequest[],
+        connectionId?: string,
     ): Promise<{
         successful: UserLicense[];
-        failed: Array<{
-            user: {
-                gitId: string;
-                gitTool: GitTool;
-                licenseStatus: LicenseStatus;
-            };
-            error: string;
-        }>;
+        failed: Array<{ user: SeatRequest; error: string }>;
     }> {
-        // Buscar licença ativa da organização
-        const orgLicense = await OrganizationLicenseRepository.findOne({
-            where: {
-                organizationId,
-                teamId,
-                subscriptionStatus: In([
-                    SubscriptionStatus.ACTIVE,
-                    SubscriptionStatus.TRIAL,
-                ]),
-            },
-        });
+        const pool = await ConnectionLicenseService.resolve(
+            organizationId,
+            teamId,
+            connectionId,
+            { create: true },
+        );
+        const orgLicense = pool?.connection ?? pool?.workspace;
 
-        if (!orgLicense) {
+        if (!pool || !orgLicense) {
+            throw new Error("Organização não possui licença ativa ou trial");
+        }
+
+        if (pool.connection) {
+            if (
+                !ConnectionLicenseService.describe(pool.workspace, pool.connection)
+                    .valid
+            ) {
+                throw new Error("Esta conexão não possui licença ativa");
+            }
+        } else if (
+            ![SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIAL].includes(
+                pool.workspace.subscriptionStatus,
+            )
+        ) {
             throw new Error("Organização não possui licença ativa ou trial");
         }
 
         // Se estiver em trial, verificar se não expirou
-        if (orgLicense.subscriptionStatus === SubscriptionStatus.TRIAL) {
+        if (
+            !pool.connection &&
+            pool.workspace.subscriptionStatus === SubscriptionStatus.TRIAL
+        ) {
             const now = new Date();
-            if (orgLicense.trialEnd && now > orgLicense.trialEnd) {
+            if (pool.workspace.trialEnd && now > pool.workspace.trialEnd) {
                 await this.migrateToFreePlan(organizationId, teamId);
                 throw new Error(
                     "A licença trial desta organização expirou e ela foi migrada para o plano gratuito",
@@ -333,7 +379,7 @@ export class OrganizationLicenseService {
         const existingLicenses = await UserLicenseRepository.find({
             where: {
                 git_id: In(users.map((u) => u.gitId)),
-                organizationLicenseId: orgLicense.id,
+                ...seatScope(pool),
             },
         });
 
@@ -345,34 +391,22 @@ export class OrganizationLicenseService {
         // Verificar licenças disponíveis
         const activeUserLicenses = await UserLicenseRepository.count({
             where: {
-                organizationLicenseId: orgLicense.id,
+                ...seatScope(pool),
                 licenseStatus: LicenseStatus.ACTIVE,
             },
         });
 
         let licencasDisponiveis = orgLicense.totalLicenses - activeUserLicenses;
 
-        console.log("licencasDisponiveis", licencasDisponiveis);
-        console.log("activeUserLicenses", activeUserLicenses);
-        console.log("orgLicense.totalLicenses", orgLicense.totalLicenses);
 
         const results = {
             successful: [] as UserLicense[],
-            failed: [] as Array<{
-                user: {
-                    gitId: string;
-                    gitTool: GitTool;
-                    licenseStatus: LicenseStatus;
-                };
-                error: string;
-            }>,
+            failed: [] as Array<{ user: SeatRequest; error: string }>,
         };
 
         // Processar usuários existentes primeiro (atualizações)
         for (const user of users) {
             const existingLicense = existingLicenseMap.get(user.gitId);
-            console.log("existingLicense", existingLicense);
-            console.log("user", user);
             if (existingLicense) {
                 try {
                     // Se estamos desativando uma licença, liberar uma vaga
@@ -410,6 +444,7 @@ export class OrganizationLicenseService {
                     // Atualizar a licença existente com os novos dados
                     existingLicense.git_tool = user.gitTool;
                     existingLicense.licenseStatus = user.licenseStatus;
+                    if (user.gitHost) existingLicense.git_host = user.gitHost;
 
                     const updatedLicense =
                         await UserLicenseRepository.save(existingLicense);
@@ -440,7 +475,9 @@ export class OrganizationLicenseService {
                         git_tool: user.gitTool,
                         licenseStatus: user.licenseStatus,
                         assignedAt: new Date(),
-                        organizationLicenseId: orgLicense.id,
+                        organizationLicenseId: pool.workspace.id,
+                        connectionLicenseId: pool.connection?.id ?? null,
+                        git_host: user.gitHost ?? null,
                     });
 
                     const savedLicense =
@@ -467,7 +504,9 @@ export class OrganizationLicenseService {
                         git_tool: user.gitTool,
                         licenseStatus: LicenseStatus.INACTIVE, // Garantir que é INACTIVE
                         assignedAt: new Date(),
-                        organizationLicenseId: orgLicense.id,
+                        organizationLicenseId: pool.workspace.id,
+                        connectionLicenseId: pool.connection?.id ?? null,
+                        git_host: user.gitHost ?? null,
                     });
 
                     const savedLicense =
@@ -486,7 +525,23 @@ export class OrganizationLicenseService {
         }
 
         // Salvar o novo contador de licenças atribuídas
-        await OrganizationLicenseRepository.save(orgLicense);
+        if (pool.connection) {
+            await ConnectionLicenseRepository.save(pool.connection);
+        } else {
+            await OrganizationLicenseRepository.save(pool.workspace);
+        }
+
+        console.log(
+            JSON.stringify({
+                message: "license_seats_assigned",
+                organizationId,
+                teamId,
+                connectionId: connectionId ?? null,
+                connectionLicenseId: pool.connection?.id ?? null,
+                successful: results.successful.length,
+                failed: results.failed.length,
+            }),
+        );
 
         // Limpar cache para garantir que as consultas futuras obtenham dados atualizados
         clearCacheByPrefix("org-license");
@@ -589,11 +644,28 @@ export class OrganizationLicenseService {
         organizationId: string,
         userId: string,
         teamId: string,
-    ): Promise<any> {
+        connectionId?: string,
+    ): Promise<{ git_id: string; isValid: boolean }> {
+        if (connectionId) {
+            const pool = await ConnectionLicenseService.resolve(
+                organizationId,
+                teamId,
+                connectionId,
+            );
+            if (!pool || !holdsSeats(pool)) {
+                return { git_id: userId, isValid: false };
+            }
+            const seat = await UserLicenseRepository.findOne({
+                where: { git_id: userId, ...seatScope(pool) },
+            });
+            return { git_id: userId, isValid: !!seat };
+        }
+
         const license = await UserLicenseRepository.findOne({
             where: {
                 git_id: userId,
                 organizationLicense: { organizationId, teamId },
+                connectionLicenseId: IsNull(),
             },
         });
 
@@ -603,6 +675,7 @@ export class OrganizationLicenseService {
     static async validateLicense(
         organizationId: string,
         teamId: string,
+        connectionId?: string,
     ): Promise<{
         valid: boolean;
         subscriptionStatus?: SubscriptionStatus;
@@ -618,7 +691,35 @@ export class OrganizationLicenseService {
         trialCreditTier?: string;
         trialUnlocks?: TrialUnlock[];
         creditBalanceUsd?: number;
+        connectionId?: string;
     }> {
+        if (!teamId && !connectionId) {
+            return this.validateOrganization(organizationId);
+        }
+
+        if (connectionId) {
+            const pool = await ConnectionLicenseService.resolve(
+                organizationId,
+                teamId,
+                connectionId,
+            );
+            if (!pool) return { valid: false };
+            if (pool.connection) {
+                return ConnectionLicenseService.describe(
+                    pool.workspace,
+                    pool.connection,
+                );
+            }
+        }
+
+        return this.validateWorkspace(organizationId, teamId);
+    }
+
+    /** The plan on a workspace's own row (its primary connection's). */
+    private static async validateWorkspace(
+        organizationId: string,
+        teamId: string,
+    ): ReturnType<typeof OrganizationLicenseService.validateLicense> {
         const license = await OrganizationLicenseRepository.findOne({
             where: { organizationId, teamId },
         });
@@ -691,6 +792,49 @@ export class OrganizationLicenseService {
             byok: isByokPlan(license.planType),
             creditBalanceUsd,
         };
+    }
+
+    /**
+     * An organization-wide read (no team): the best valid plan among the
+     * organization's workspaces and their Git connections. Organization-level
+     * gates use it, so a plan bought for one connection counts.
+     */
+    private static async validateOrganization(
+        organizationId: string,
+    ): ReturnType<typeof OrganizationLicenseService.validateLicense> {
+        const workspaces = await OrganizationLicenseRepository.find({
+            where: { organizationId },
+            order: { createdAt: "ASC" },
+        });
+        if (!workspaces.length) return { valid: false };
+
+        const connections = await ConnectionLicenseRepository.find({
+            where: { organizationId },
+        });
+        if (workspaces.length === 1 && !connections.length) {
+            return this.validateWorkspace(organizationId, workspaces[0].teamId);
+        }
+
+        const byId = new Map(workspaces.map((w) => [w.id, w]));
+        const candidates = [
+            ...(await Promise.all(
+                workspaces.map((w) =>
+                    this.validateWorkspace(organizationId, w.teamId),
+                ),
+            )),
+            ...connections
+                .filter((c) => byId.has(c.organizationLicenseId))
+                .map((c) =>
+                    ConnectionLicenseService.describe(
+                        byId.get(c.organizationLicenseId)!,
+                        c,
+                    ),
+                ),
+        ];
+
+        return candidates.reduce((best, candidate) =>
+            planRank(candidate) > planRank(best) ? candidate : best,
+        );
     }
 
     static async recalculateTrialUnlocks(
@@ -968,10 +1112,33 @@ export class OrganizationLicenseService {
     static async getAllUsersWithLicense(
         organizationId: string,
         teamId: string,
+        connectionId?: string,
     ): Promise<{ git_id: string }[]> {
+        const pool = connectionId
+            ? await ConnectionLicenseService.resolve(
+                  organizationId,
+                  teamId,
+                  connectionId,
+              )
+            : null;
+        if (connectionId && !pool) return [];
+
+        if (pool?.connection) {
+            if (!holdsSeats(pool)) return [];
+            const seats = await UserLicenseRepository.find({
+                where: {
+                    licenseStatus: LicenseStatus.ACTIVE,
+                    connectionLicenseId: pool.connection.id,
+                },
+                order: { createdAt: "DESC" },
+            });
+            return seats.map((seat) => ({ git_id: seat.git_id }));
+        }
+
         const licenses = await UserLicenseRepository.find({
             where: {
                 licenseStatus: LicenseStatus.ACTIVE,
+                connectionLicenseId: IsNull(),
                 organizationLicense: {
                     organizationId,
                     teamId,
@@ -1096,9 +1263,10 @@ export class OrganizationLicenseService {
         }
 
         // Migrar para plano gratuito
+        // The Stripe customer stays: the prepaid wallet's purchases and the
+        // saved auto top-up card are on it.
         license.planType = PlanType.FREE_BYOK;
         license.subscriptionStatus = SubscriptionStatus.ACTIVE;
-        license.stripeCustomerId = null;
         license.stripeSubscriptionId = null;
 
         await OrganizationLicenseRepository.save(license);

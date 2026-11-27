@@ -5,6 +5,7 @@ import { UserLicense } from "../entities/UserLicense";
 import { OrganizationLicense } from "../entities/OrganizationLicense";
 import { CreditAutoTopUpReservation } from "../entities/CreditAutoTopUpReservation";
 import { CreditLedgerEntry } from "../entities/CreditLedgerEntry";
+import { ConnectionLicense } from "../entities/ConnectionLicense";
 
 const isDev = process.env.API_DATABASE_ENV === "development";
 
@@ -25,6 +26,7 @@ export const AppDataSource = new DataSource({
     : false,
   entities: [
     UserLicense, OrganizationLicense, CreditLedgerEntry, CreditAutoTopUpReservation,
+    ConnectionLicense,
   ],
   migrations: [join(__dirname, '../migrations/*{.ts,.js}')],
   subscribers: [join(__dirname, './subscribers/*{.ts,.js}')],
