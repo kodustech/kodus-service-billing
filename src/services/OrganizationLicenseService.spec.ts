@@ -202,6 +202,113 @@ describe("OrganizationLicenseService.createTrialLicense", () => {
         expect(license.trialCreditTier).toBe(TrialCreditTier.BASE);
         expect(Array.isArray(license.trialUnlocks)).toBe(true);
     });
+
+    describe("trial length", () => {
+        const original = process.env.TRIAL_DURATION;
+        afterEach(() => {
+            if (original === undefined) delete process.env.TRIAL_DURATION;
+            else process.env.TRIAL_DURATION = original;
+        });
+
+        const daysUntil = (d: Date) =>
+            Math.round((d.getTime() - Date.now()) / 86_400_000);
+
+        it.each([
+            ["7", 7],
+            [undefined, 14],
+            ["abc", 14],
+            ["0", 14],
+            ["365", 365],
+            ["2592000", 14],
+        ])("TRIAL_DURATION=%s stamps a trialEnd %i days out", async (env, days) => {
+            if (env === undefined) delete process.env.TRIAL_DURATION;
+            else process.env.TRIAL_DURATION = env;
+            repo.findOne.mockResolvedValue(null);
+
+            const license = await OrganizationLicenseService.createTrialLicense(
+                "org",
+                "team",
+            );
+
+            expect(daysUntil(license.trialEnd)).toBe(days);
+        });
+    });
+});
+
+describe("OrganizationLicenseService.getTrialTerms", () => {
+    const original = process.env.TRIAL_DURATION;
+    afterEach(() => {
+        if (original === undefined) delete process.env.TRIAL_DURATION;
+        else process.env.TRIAL_DURATION = original;
+    });
+
+    it("reports the length a trial started now gets, read on every call", () => {
+        process.env.TRIAL_DURATION = "7";
+        expect(OrganizationLicenseService.getTrialTerms()).toEqual({
+            trialDays: 7,
+            trialReviewCreditsIncluded: 5,
+        });
+
+        process.env.TRIAL_DURATION = "21";
+        expect(OrganizationLicenseService.getTrialTerms().trialDays).toBe(21);
+    });
+
+    it("reads the included reviews on every call too, and stamps the same number on a new trial", async () => {
+        const originalCredits = process.env.TRIAL_REVIEW_CREDITS_INCLUDED;
+        process.env.TRIAL_REVIEW_CREDITS_INCLUDED = "0";
+        try {
+            expect(
+                OrganizationLicenseService.getTrialTerms()
+                    .trialReviewCreditsIncluded,
+            ).toBe(0);
+
+            (OrganizationLicenseRepository.findOne as jest.Mock).mockResolvedValue(null);
+            const license = await OrganizationLicenseService.createTrialLicense(
+                "org",
+                "team",
+            );
+            expect(license.trialReviewCreditsTotal).toBe(0);
+            expect(license.trialReviewCreditsRemaining).toBe(0);
+        } finally {
+            if (originalCredits === undefined)
+                delete process.env.TRIAL_REVIEW_CREDITS_INCLUDED;
+            else process.env.TRIAL_REVIEW_CREDITS_INCLUDED = originalCredits;
+        }
+    });
+
+    it("falls back to 14 days on the same values createTrialLicense rejects", () => {
+        process.env.TRIAL_DURATION = "2592000";
+        expect(OrganizationLicenseService.getTrialTerms().trialDays).toBe(14);
+    });
+});
+
+describe("OrganizationLicenseService.validateLicense", () => {
+    const repo = OrganizationLicenseRepository as unknown as {
+        findOne: jest.Mock;
+    };
+
+    it("returns a running trial's window: trialStart is when the license was created", async () => {
+        const createdAt = new Date("2026-11-20T10:00:00Z");
+        const trialEnd = futureTrialEnd();
+        repo.findOne.mockResolvedValue({
+            organizationId: "org",
+            teamId: "team",
+            subscriptionStatus: SubscriptionStatus.TRIAL,
+            planType: "teams_managed",
+            createdAt,
+            trialEnd,
+            trialReviewCreditsTotal: null,
+        });
+
+        const result = await OrganizationLicenseService.validateLicense(
+            "org",
+            "team",
+        );
+
+        expect(result.subscriptionStatus).toBe(SubscriptionStatus.TRIAL);
+        expect(result.trialStart).toEqual(createdAt);
+        expect(result.trialEnd).toEqual(trialEnd);
+    });
 });
 
 describe("OrganizationLicenseService.recalculateTrialUnlocks", () => {
